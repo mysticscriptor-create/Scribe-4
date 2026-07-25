@@ -38,6 +38,7 @@ import androidx.core.view.WindowCompat
 import coil3.ImageLoader
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.allowHardware
 import com.primaloptima.scribe.util.DefaultThemes
 import com.primaloptima.scribe.util.ThemeDataStoreRepo
 import com.primaloptima.scribe.util.ThemeManager
@@ -120,7 +121,7 @@ fun ScribeComposeTheme(
                 val request = ImageRequest.Builder(context)
                     .data(bgUri)
                     .size(32, 32)
-                    .allowHardware(false) // Required: hardware bitmaps don't support getPixel()
+                    .allowHardware(false) // Prevents hardware bitmap; getPixel() requires software config
                     .build()
                 (ImageLoader(context).execute(request).image as? BitmapImage)?.bitmap
             } catch (_: Exception) {
