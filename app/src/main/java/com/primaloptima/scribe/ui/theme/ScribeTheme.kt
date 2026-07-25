@@ -120,6 +120,7 @@ fun ScribeComposeTheme(
                 val request = ImageRequest.Builder(context)
                     .data(bgUri)
                     .size(32, 32)
+                    .allowHardware(false) // Required: hardware bitmaps don't support getPixel()
                     .build()
                 (ImageLoader(context).execute(request).image as? BitmapImage)?.bitmap
             } catch (_: Exception) {
