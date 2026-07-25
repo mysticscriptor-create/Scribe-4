@@ -24,6 +24,8 @@ fun regionLuminance(
     screenWidthPx: Float,
     screenHeightPx: Float
 ): Double {
+    // Hardware bitmaps live on the GPU and don't support getPixel() — bail safely.
+    if (bitmap.config == android.graphics.Bitmap.Config.HARDWARE) return 0.5
     if (bitmap.width == 0 || bitmap.height == 0 || screenWidthPx <= 0f || screenHeightPx <= 0f) {
         return 0.5
     }
