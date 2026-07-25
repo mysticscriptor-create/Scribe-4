@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:id="@+id/menu_typewriter"
+        android:title="Typewriter mode"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_find"
+        android:title="Find &amp; Replace"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_export"
+        android:title="Export"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_zen"
+        android:title="Zen mode"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_history"
+        android:title="History"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_sheets"
+        android:title="World building"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_shortcuts"
+        android:title="Shortcuts"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_themes"
+        android:title="Themes"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_guide"
+        android:title="Guide"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_settings"
+        android:title="Settings"
+        app:showAsAction="never" />
+
+</menu>

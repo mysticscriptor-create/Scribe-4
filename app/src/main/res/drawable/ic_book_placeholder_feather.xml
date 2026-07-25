@@ -1,0 +1,49 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="200dp"
+    android:height="280dp"
+    android:viewportWidth="200"
+    android:viewportHeight="280">
+
+    <!-- Card Background Gradient / Base Dark Surface -->
+    <path
+        android:pathData="M0,0h200v280h-200z"
+        android:fillColor="#1E1E24" />
+
+    <!-- Soft Geometric Shadow / Accent Diagonal Lines -->
+    <path
+        android:pathData="M-20,0 L220,240 L220,280 L-20,40 Z"
+        android:fillColor="#262630"
+        android:fillAlpha="0.6" />
+
+    <path
+        android:pathData="M-20,100 L220,340 L220,380 L-20,140 Z"
+        android:fillColor="#2A2A36"
+        android:fillAlpha="0.4" />
+
+    <!-- Center Emblem Ring -->
+    <path
+        android:pathData="M100,140 m-45,0 a45,45 0 1,1 90,0 a45,45 0 1,1 -90,0"
+        android:strokeColor="#3A3A4A"
+        android:strokeWidth="1.5"
+        android:fillColor="#24242F" />
+
+    <!-- Feather Quill Vector -->
+    <path
+        android:pathData="M125,105 C115,115 95,135 80,165 C78,169 76,175 75,180 L70,190 L75,185 C80,180 88,175 95,170 C105,162 120,150 130,135 C133,130 135,120 130,110 Z"
+        android:fillColor="#A2E048"
+        android:fillAlpha="0.9" />
+
+    <path
+        android:pathData="M125,105 L70,190"
+        android:strokeColor="#1E1E24"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round" />
+
+    <!-- Subtle Feather Vane Cuts -->
+    <path
+        android:pathData="M105,130 L118,122 M98,142 L112,132 M90,155 L102,145"
+        android:strokeColor="#1E1E24"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round" />
+
+</vector>

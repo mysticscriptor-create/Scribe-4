@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="editor_padding_horizontal">24dp</dimen>
+    <dimen name="editor_padding_vertical">20dp</dimen>
+    <dimen name="shortcut_bar_height">44dp</dimen>
+    <dimen name="top_bar_height">48dp</dimen>
+    <dimen name="note_item_padding_v">12dp</dimen>
+    <dimen name="note_item_padding_h">16dp</dimen>
+    <dimen name="card_corner_radius">8dp</dimen>
+    <dimen name="card_elevation">2dp</dimen>
+    <dimen name="left_drawer_width">300dp</dimen>
+    <dimen name="right_drawer_width">280dp</dimen>
+    <dimen name="section_header_padding_top">20dp</dimen>
+    <dimen name="section_header_padding_bottom">6dp</dimen>
+    <dimen name="settings_row_padding_v">14dp</dimen>
+    <dimen name="settings_row_padding_h">16dp</dimen>
+    <dimen name="swatch_size">40dp</dimen>
+    <dimen name="icon_button_size">40dp</dimen>
+    <dimen name="icon_button_size_small">32dp</dimen>
+    <dimen name="fab_margin">16dp</dimen>
+</resources>

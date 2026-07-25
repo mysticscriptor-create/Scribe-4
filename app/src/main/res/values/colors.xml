@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand -->
+    <color name="scribe_amber">#A8651E</color>
+    <color name="scribe_amber_dark">#7C4810</color>
+
+    <!-- Material baseline (required by themes.xml) -->
+    <color name="md_theme_light_primary">#A8651E</color>
+    <color name="md_theme_light_onPrimary">#FFFFFF</color>
+    <color name="md_theme_light_primaryContainer">#FFDCBB</color>
+    <color name="md_theme_light_onPrimaryContainer">#351A00</color>
+    <color name="md_theme_light_secondary">#715B3F</color>
+    <color name="md_theme_light_onSecondary">#FFFFFF</color>
+    <color name="md_theme_light_secondaryContainer">#FCDEBE</color>
+    <color name="md_theme_light_onSecondaryContainer">#281A06</color>
+    <color name="md_theme_light_background">#F5EFE4</color>
+    <color name="md_theme_light_onBackground">#2A2622</color>
+    <color name="md_theme_light_surface">#EEE7DA</color>
+    <color name="md_theme_light_onSurface">#2A2622</color>
+    <color name="md_theme_light_outline">#C8BDB0</color>
+    <color name="md_theme_light_error">#BA1A1A</color>
+    <color name="md_theme_light_onError">#FFFFFF</color>
+
+    <color name="md_theme_dark_primary">#FFBF7A</color>
+    <color name="md_theme_dark_onPrimary">#4D2700</color>
+    <color name="md_theme_dark_primaryContainer">#6B3B00</color>
+    <color name="md_theme_dark_onPrimaryContainer">#FFDCBB</color>
+    <color name="md_theme_dark_secondary">#DFBF9D</color>
+    <color name="md_theme_dark_onSecondary">#3F2C14</color>
+    <color name="md_theme_dark_secondaryContainer">#584328</color>
+    <color name="md_theme_dark_onSecondaryContainer">#FCDEBE</color>
+    <color name="md_theme_dark_background">#1A1612</color>
+    <color name="md_theme_dark_onBackground">#EDE0D4</color>
+    <color name="md_theme_dark_surface">#231F1A</color>
+    <color name="md_theme_dark_onSurface">#EDE0D4</color>
+    <color name="md_theme_dark_outline">#5D5652</color>
+    <color name="md_theme_dark_error">#FFB4AB</color>
+    <color name="md_theme_dark_onError">#690005</color>
+
+    <!-- Common -->
+    <color name="transparent">#00000000</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="overlay_dim">#33000000</color>
+</resources>

@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- SAF file access (no storage permission needed — SAF grants URI access) -->
+    <!-- Legacy external storage permission for image picker on older devices -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <!-- Scoped media access on Android 13+ for book cover photos and sheet portraits -->
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_IMAGES"
+        tools:ignore="PermissionImpliesUnsupportedChromeOsHardware" />
+    <!-- Camera for capturing cover / portrait photos -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <application
+        android:name=".ScribeApp"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Scribe"
+        tools:targetApi="31">
+
+        <!-- ── Launcher: books homepage ──────────────────────────────── -->
+        <activity
+            android:name=".HomeActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustPan"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- ── Book interior (files / folders) ──────────────────────── -->
+        <activity
+            android:name=".BookActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:parentActivityName=".HomeActivity"
+            android:windowSoftInputMode="adjustPan"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />
+
+        <!-- ── Editor ─────────────────────────────────────────────────── -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:parentActivityName=".BookActivity"
+            android:windowSoftInputMode="adjustPan"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />
+
+        <!-- Settings -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:parentActivityName=".HomeActivity"
+            android:windowSoftInputMode="adjustPan" />
+
+        <!-- Theme list -->
+        <activity
+            android:name=".ThemeListActivity"
+            android:exported="false"
+            android:parentActivityName=".SettingsActivity" />
+
+        <!-- Theme editor -->
+        <activity
+            android:name=".ThemeEditActivity"
+            android:exported="false"
+            android:parentActivityName=".ThemeListActivity"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Version history -->
+        <activity
+            android:name=".HistoryActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity" />
+
+        <!-- Character / Location sheets -->
+        <activity
+            android:name=".SheetsActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Custom shortcuts -->
+        <activity
+            android:name=".ShortcutsActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Guide / welcome screen -->
+        <activity
+            android:name=".GuideActivity"
+            android:exported="false"
+            android:parentActivityName=".HomeActivity" />
+
+        <!-- Crash reporter — uses a built-in system theme so it can never
+             itself crash due to missing custom resources. -->
+        <activity
+            android:name=".CrashActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance" />
+
+        <!-- File provider for sharing exported files -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_provider_paths" />
+        </provider>
+
+    </application>
+</manifest>

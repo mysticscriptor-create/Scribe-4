@@ -1,0 +1,6 @@
+{
+  "name": "Scribe",
+  "description": "Distraction-free Markdown editor and note-taking application for Android.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

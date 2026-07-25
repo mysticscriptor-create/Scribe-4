@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/nav_book_write"
+        android:icon="@drawable/ic_edit"
+        android:title="Write" />
+    <item
+        android:id="@+id/nav_book_stats"
+        android:icon="@drawable/ic_sidebar"
+        android:title="Statistics" />
+</menu>
