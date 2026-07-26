@@ -1092,10 +1092,12 @@ fun MainEditorScreen(
                                 }
                             },
                             bottomBar = {
-                                // rememberKeyboardVisibility uses ViewTreeObserver.OnPreDrawListener
-                                // + WindowInsetsCompat — works with adjustPan and all API levels.
                                 val isKeyboardVisible = rememberKeyboardVisibility()
-                                if (!zenMode && isKeyboardVisible) {
+                                AnimatedVisibility(
+                                    visible = !zenMode && isKeyboardVisible,
+                                    enter = slideInVertically(initialOffsetY = { it }),
+                                    exit = slideOutVertically(targetOffsetY = { it })
+                                ) {
                                     Surface(
                                         shadowElevation = 8.dp,
                                         color = Color.Transparent,
