@@ -9,8 +9,17 @@ import android.os.Build
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -44,8 +53,8 @@ import com.primaloptima.scribe.util.ThemeDataStoreRepo
 import com.primaloptima.scribe.util.ThemeManager
 import com.primaloptima.scribe.util.model.AppTheme
 import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.haze
-import dev.chrisbanes.haze.hazeChild
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.rememberHazeState
 import dev.chrisbanes.haze.materials.HazeMaterials
 import kotlinx.coroutines.Dispatchers
@@ -79,7 +88,7 @@ fun Modifier.frostedBar(hazeState: HazeState?): Modifier {
     val solidSurface = LocalSolidSurface.current
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         if (hazeState != null) {
-            this.hazeChild(state = hazeState, style = HazeMaterials.thin())
+            this.hazeEffect(state = hazeState, style = HazeMaterials.thin())
         } else {
             this
         }
@@ -103,7 +112,7 @@ fun Modifier.frostedFab(hazeState: HazeState?): Modifier {
     return if (!hasBgImage || hazeState == null) {
         this
     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        this.hazeChild(state = hazeState, style = HazeMaterials.regular())
+        this.hazeEffect(state = hazeState, style = HazeMaterials.regular())
     } else {
         this.background(solidSurface.copy(alpha = 0.75f), shape = androidx.compose.foundation.shape.CircleShape)
     }
@@ -133,10 +142,92 @@ fun Modifier.frostedPanel(hazeState: HazeState?): Modifier {
     return if (!hasBgImage || hazeState == null) {
         this
     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        this.hazeChild(state = hazeState, style = HazeMaterials.regular())
+        this.hazeEffect(state = hazeState, style = HazeMaterials.regular())
     } else {
         // Pre-API-31 fallback: near-opaque surface colour so text stays readable
         this.background(solidSurface.copy(alpha = 0.95f))
+    }
+}
+
+/**
+ * A dialog that lives in the same window as the rest of the UI, so Haze blur works correctly.
+ * Standard AlertDialog creates a separate Android window which breaks hazeEffect.
+ *
+ * Usage: replace AlertDialog with FrostedDialog. The API mirrors AlertDialog.
+ *
+ * When no background image is active the dialog looks identical to a standard M3 AlertDialog
+ * because it uses the solid surface color. When a background image IS active, the dialog
+ * surface itself gets the frosted blur via hazeEffect.
+ */
+@Composable
+fun FrostedDialog(
+    onDismissRequest: () -> Unit,
+    title: @Composable (() -> Unit)? = null,
+    text: @Composable (() -> Unit)? = null,
+    confirmButton: @Composable () -> Unit,
+    dismissButton: @Composable (() -> Unit)? = null,
+) {
+    val hazeState = LocalHazeState.current
+    val solidSurface = LocalSolidSurface.current
+    val theme = LocalAppTheme.current
+    val hasBgImage = theme?.backgroundImageUri?.isNotEmpty() == true &&
+            (theme.bgMode == "image" || theme.bgMode == "blurred")
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(28.dp)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.45f))
+            .clickable(
+                indication = null,
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+            ) { onDismissRequest() },
+        contentAlignment = Alignment.Center
+    ) {
+        val containerModifier = if (hasBgImage && hazeState != null &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            Modifier
+                .hazeEffect(state = hazeState, style = HazeMaterials.regular())
+                .clip(shape)
+        } else {
+            Modifier
+                .background(solidSurface, shape = shape)
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth(0.85f)
+                .then(containerModifier)
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                ) { /* consume so taps inside don't dismiss */ }
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            title?.let {
+                androidx.compose.runtime.CompositionLocalProvider {
+                    androidx.compose.material3.ProvideTextStyle(
+                        value = androidx.compose.material3.MaterialTheme.typography.headlineSmall
+                    ) { it() }
+                }
+            }
+            text?.let {
+                androidx.compose.runtime.CompositionLocalProvider {
+                    androidx.compose.material3.ProvideTextStyle(
+                        value = androidx.compose.material3.MaterialTheme.typography.bodyMedium
+                    ) { it() }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                dismissButton?.invoke()
+                confirmButton()
+            }
+        }
     }
 }
 
@@ -387,6 +478,7 @@ fun ScribeComposeTheme(
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
                                 .fillMaxSize()
+                                .hazeSource(state = hazeState)
                                 .then(
                                     if (bgMode == "blurred" && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && blurIntensity > 0f) {
                                         Modifier.graphicsLayer {
