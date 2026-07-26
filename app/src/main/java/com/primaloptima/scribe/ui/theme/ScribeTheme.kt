@@ -356,7 +356,7 @@ fun ScribeComposeTheme(
         }
     }
 
-    val hazeState = remember { HazeState() }
+    val hazeState = rememberHazeState(blurEnabled = true)
 
     MaterialTheme(
         colorScheme = animatedColorScheme,
