@@ -35,8 +35,8 @@ import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
 import com.primaloptima.scribe.ui.theme.frostedFab
+import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
-import dev.chrisbanes.haze.haze
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -499,7 +499,7 @@ fun BookScreen(
     // Dialogs
     if (showCreateNoteDialog) {
         var noteTitle by remember { mutableStateOf("") }
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { showCreateNoteDialog = false },
             title = { Text("New Note") },
             text = {
@@ -536,7 +536,7 @@ fun BookScreen(
 
     if (showCreateFolderDialog) {
         var folderName by remember { mutableStateOf("") }
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { showCreateFolderDialog = false },
             title = { Text("New Folder") },
             text = {
@@ -568,7 +568,7 @@ fun BookScreen(
 
     noteToRename?.let { note ->
         var renameText by remember { mutableStateOf(note.name) }
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { noteToRename = null },
             title = { Text("Rename Note") },
             text = {
@@ -597,7 +597,7 @@ fun BookScreen(
     }
 
     noteToDelete?.let { note ->
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { noteToDelete = null },
             title = { Text("Delete Note?") },
             text = { Text("Are you sure you want to delete \"${note.name}\"?") },

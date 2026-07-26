@@ -42,9 +42,10 @@ import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
 import com.primaloptima.scribe.ui.theme.frostedFab
 import com.primaloptima.scribe.ui.theme.frostedPanel
+import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.parseComposeColor
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
-import dev.chrisbanes.haze.haze
+import dev.chrisbanes.haze.hazeSource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -475,7 +476,7 @@ fun HomeScreen(
                         state = pagerState,
                         modifier = Modifier
                             .fillMaxSize()
-                            .then(if (hazeState != null) Modifier.haze(hazeState) else Modifier)
+                            .then(if (hazeState != null) Modifier.hazeSource(hazeState) else Modifier)
                     ) { page ->
                         when (page) {
                             0 -> BooksTabContent(
@@ -600,7 +601,7 @@ fun HomeScreen(
     // Dialogs
     if (showCreateDialog) {
         var newTitle by remember { mutableStateOf("") }
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { showCreateDialog = false },
             title = { Text("New Book") },
             text = {
@@ -630,7 +631,7 @@ fun HomeScreen(
 
     bookToRename?.let { book ->
         var renameText by remember { mutableStateOf(book.title) }
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { bookToRename = null },
             title = { Text("Rename Book") },
             text = {
@@ -659,7 +660,7 @@ fun HomeScreen(
     }
 
     bookToDelete?.let { book ->
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { bookToDelete = null },
             title = { Text("Delete Book?") },
             text = { Text("Are you sure you want to delete \"${book.title}\"? All notes in it will be lost.") },

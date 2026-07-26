@@ -41,9 +41,10 @@ import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
 import com.primaloptima.scribe.ui.theme.frostedPanel
+import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
 import com.primaloptima.scribe.ui.util.rememberKeyboardVisibility
-import dev.chrisbanes.haze.haze
+import dev.chrisbanes.haze.hazeSource
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -225,7 +226,7 @@ fun MainEditorScreen(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
-                    .then(if (editorHazeState != null) Modifier.haze(editorHazeState) else Modifier)
+                    .then(if (editorHazeState != null) Modifier.hazeSource(editorHazeState) else Modifier)
                     .then(
                         if (bgMode == "blurred" && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S && blurIntensity > 0f) {
                             Modifier.graphicsLayer {
@@ -1350,7 +1351,7 @@ fun MainEditorScreen(
     if (showRenameDialog && activeNote != null) {
         val noteToRename = activeNote // captured to avoid race during recomposition
         var renameText by remember { mutableStateOf(noteToRename?.name ?: "") }
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { showRenameDialog = false },
             title = { Text("Rename Note") },
             text = {
@@ -1380,7 +1381,7 @@ fun MainEditorScreen(
 
     if (showCreateNoteDialog) {
         var noteTitle by remember { mutableStateOf("") }
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { showCreateNoteDialog = false },
             title = { Text("New Note") },
             text = {
@@ -1446,7 +1447,7 @@ private fun FileExplorerOverlayDialog(
         map
     }
 
-    AlertDialog(
+    FrostedDialog(
         onDismissRequest = onDismiss,
         title = { Text("Pick a note to pin", fontWeight = FontWeight.Bold) },
         text = {
