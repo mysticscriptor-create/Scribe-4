@@ -38,15 +38,17 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import com.primaloptima.scribe.ui.theme.LocalHazeState
+import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
+import com.primaloptima.scribe.ui.theme.frostedPanel
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
+import com.primaloptima.scribe.ui.util.rememberKeyboardVisibility
 import dev.chrisbanes.haze.haze
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -162,7 +164,7 @@ fun MainEditorScreen(
     LaunchedEffect(goalProgress) {
         if (goalProgress >= 1f && !goalNotified && wordCount > 0) {
             goalNotified = true
-            Toast.makeText(context, "Daily writing goal reached! 🎯", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Daily writing goal reached!", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -250,8 +252,10 @@ fun MainEditorScreen(
             gesturesEnabled = true,
             drawerContent = {
                 ModalDrawerSheet(
-                    drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                    modifier = Modifier.width(320.dp)
+                    drawerContainerColor = Color.Transparent,
+                    modifier = Modifier
+                        .width(320.dp)
+                        .frostedPanel(LocalHazeState.current)
                 ) {
                     Column(
                         modifier = Modifier
@@ -367,7 +371,7 @@ fun MainEditorScreen(
                                                     showFolderMenu = false
                                                     showFolderPinSubMenu = false
                                                 },
-                                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+                                                containerColor = LocalSolidSurface.current
                                             ) {
                                                 if (!showFolderPinSubMenu) {
                                                     DropdownMenuItem(
@@ -463,7 +467,7 @@ fun MainEditorScreen(
                                                         showMenu = false
                                                         showPinSubMenu = false
                                                     },
-                                                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+                                                    containerColor = LocalSolidSurface.current
                                                 ) {
                                                     if (!showPinSubMenu) {
                                                         DropdownMenuItem(
@@ -581,7 +585,7 @@ fun MainEditorScreen(
                                                     showMenu = false
                                                     showPinSubMenu = false
                                                 },
-                                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+                                                containerColor = LocalSolidSurface.current
                                             ) {
                                                 if (!showPinSubMenu) {
                                                     DropdownMenuItem(
@@ -656,8 +660,10 @@ fun MainEditorScreen(
                     drawerContent = {
                         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                             ModalDrawerSheet(
-                                drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                                modifier = Modifier.width(320.dp)
+                                drawerContainerColor = Color.Transparent,
+                                modifier = Modifier
+                                    .width(320.dp)
+                                    .frostedPanel(LocalHazeState.current)
                             ) {
                                 Spacer(modifier = Modifier.height(12.dp))
                                 TabRow(selectedTabIndex = rightDrawerTab) {
@@ -1002,7 +1008,7 @@ fun MainEditorScreen(
                                                 DropdownMenu(
                                                     expanded = showMenu,
                                                     onDismissRequest = { showMenu = false },
-                                                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+                                                    containerColor = LocalSolidSurface.current
                                                 ) {
                                                     DropdownMenuItem(
                                                         text = { Text("Open as Floating Reference Window") },
@@ -1086,9 +1092,10 @@ fun MainEditorScreen(
                                 }
                             },
                             bottomBar = {
-                                val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
-                                val imeVisible = imeBottom > 0
-                                if (!zenMode && imeVisible) {
+                                // rememberKeyboardVisibility uses ViewTreeObserver.OnPreDrawListener
+                                // + WindowInsetsCompat — works with adjustPan and all API levels.
+                                val isKeyboardVisible = rememberKeyboardVisibility()
+                                if (!zenMode && isKeyboardVisible) {
                                     Surface(
                                         shadowElevation = 8.dp,
                                         color = Color.Transparent,
@@ -1126,10 +1133,6 @@ fun MainEditorScreen(
                                 }
                             }
                         ) { padding ->
-                            val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
-                            val density = LocalDensity.current
-                            val imeBottomDp = with(density) { imeBottom.toDp() }
-
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -1138,7 +1141,6 @@ fun MainEditorScreen(
                                 Column(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .padding(bottom = imeBottomDp)
                                 ) {
                                     if (showFindBar) {
                                         Surface(

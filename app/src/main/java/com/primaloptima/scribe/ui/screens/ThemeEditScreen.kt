@@ -47,10 +47,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.google.gson.GsonBuilder
 import com.primaloptima.scribe.ui.theme.FontHelper
 import com.primaloptima.scribe.ui.theme.parseComposeColor
 import com.primaloptima.scribe.util.DefaultThemes
+import com.primaloptima.scribe.util.SAFHelper
 import com.primaloptima.scribe.util.model.AppTheme
 import com.primaloptima.scribe.viewmodel.ThemeViewModel
 import java.io.File
@@ -92,12 +94,19 @@ fun ThemeEditScreen(
     var activeColorPickerTarget by remember { mutableStateOf<ColorPickerTarget?>(null) }
     var showEmojiDialog by remember { mutableStateOf(false) }
 
+    val scope = rememberCoroutineScope()
+
+    // Fix: copy image to internal app storage so it survives process death.
+    // SAF content:// URIs lose permission on force-stop; file:// paths in filesDir do not.
     val bgImagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        uri?.let {
-            bgUri = it.toString()
-            if (bgMode == "color") bgMode = "image"
+        if (uri != null) {
+            scope.launch {
+                val localUri = SAFHelper.copyBgImageToInternalStorage(context, uri)
+                bgUri = (localUri ?: uri).toString()
+                if (bgMode == "color") bgMode = "image"
+            }
         }
     }
 
@@ -600,7 +609,7 @@ fun ThemeEditScreen(
         val emojis = listOf("🖊️", "📖", "🌙", "⭐", "🌿", "🔥", "🌊", "🌸", "🏔️", "🌌", "📜", "✨", "🎭", "🌅", "🍂", "❄️", "🌙", "🪶", "🕯️", "🌺")
         AlertDialog(
             onDismissRequest = { showEmojiDialog = false },
-            title = { Text("Choose Emoji") },
+            title = { Text("Theme Badge") },
             text = {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(5),
@@ -764,10 +773,18 @@ private fun LivePreviewCard(
                             } else Modifier
                         )
                 )
+                // Overlay: on API 31+ the GPU blur handles it; on older devices we
+                // compensate by boosting the overlay opacity when blur intensity is raised,
+                // simulating the visual weight the blur would normally add.
+                val overlayAlpha = if (bgMode == "blurred" && Build.VERSION.SDK_INT < Build.VERSION_CODES.S && blurIntensity > 0f) {
+                    (bgOpacity + blurIntensity / 35f).coerceIn(0f, 0.90f)
+                } else {
+                    bgOpacity
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = bgOpacity))
+                        .background(Color.Black.copy(alpha = overlayAlpha))
                 )
             }
 

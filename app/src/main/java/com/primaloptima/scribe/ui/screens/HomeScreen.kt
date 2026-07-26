@@ -41,6 +41,7 @@ import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
 import com.primaloptima.scribe.ui.theme.frostedFab
+import com.primaloptima.scribe.ui.theme.frostedPanel
 import com.primaloptima.scribe.ui.theme.parseComposeColor
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
 import dev.chrisbanes.haze.haze
@@ -77,6 +78,7 @@ fun HomeScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    var rightPanelVisible by remember { mutableStateOf(false) }
     val repo = remember { ThemeDataStoreRepo(context) }
 
     // 0: Books, 1: Notes, 2: Statistics
@@ -138,7 +140,7 @@ fun HomeScreen(
         bookToChangeCover = null
     }
 
-    val swipeGestureModifier = Modifier.pointerInput(drawerState) {
+    val swipeGestureModifier = Modifier.pointerInput(drawerState, rightPanelVisible) {
         var startX = 0f
         var totalX = 0f
         detectHorizontalDragGestures(
@@ -148,9 +150,16 @@ fun HomeScreen(
             },
             onHorizontalDrag = { change, dragAmount ->
                 totalX += dragAmount
-                if (drawerState.isClosed && startX < size.width * 0.5f && totalX > 36.dp.toPx()) {
+                val threshold = 36.dp.toPx()
+                // Left-edge swipe → open navigation drawer
+                if (drawerState.isClosed && startX < size.width * 0.3f && totalX > threshold) {
                     change.consume()
                     scope.launch { drawerState.open() }
+                }
+                // Right-edge swipe → open stats panel
+                if (!rightPanelVisible && startX > size.width * 0.72f && totalX < -threshold) {
+                    change.consume()
+                    rightPanelVisible = true
                 }
             }
         )
@@ -163,8 +172,11 @@ fun HomeScreen(
         gesturesEnabled = true,
         drawerContent = {
             ModalDrawerSheet(
-                modifier = Modifier.requiredWidth(280.dp),
-                drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+                drawerContainerColor = Color.Transparent,
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(0.78f)
+                    .frostedPanel(hazeState)
             ) {
                 Spacer(modifier = Modifier.height(24.dp))
                 Row(
@@ -275,6 +287,9 @@ fun HomeScreen(
                     },
                     actions = {
                         if (!isSearching) {
+                            IconButton(onClick = { rightPanelVisible = !rightPanelVisible }) {
+                                Icon(Icons.Default.Info, contentDescription = "Overview")
+                            }
                             IconButton(onClick = { isSearching = true }) {
                                 Icon(Icons.Default.Search, contentDescription = "Search")
                             }
@@ -314,7 +329,7 @@ fun HomeScreen(
                             DropdownMenu(
                                 expanded = showSortMenu,
                                 onDismissRequest = { showSortMenu = false },
-                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+                                containerColor = LocalSolidSurface.current
                             ) {
                                 DropdownMenuItem(
                                     text = { Text("Date Updated") },
@@ -394,33 +409,46 @@ fun HomeScreen(
                 }
             },
             floatingActionButton = {
-                val hazeState = LocalHazeState.current
-                if (selectedNavTab == 0) {
-                    FloatingActionButton(
-                        onClick = { showCreateDialog = true },
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.frostedFab(hazeState)
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = "New Book")
+                val fabTheme = LocalAppTheme.current
+                val accentClr = fabTheme?.let {
+                    parseComposeColor(it.colors.accent, MaterialTheme.colorScheme.primary)
+                } ?: MaterialTheme.colorScheme.primary
+
+                AnimatedContent(
+                    targetState = selectedNavTab,
+                    transitionSpec = {
+                        (scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) +
+                                fadeIn()) togetherWith (scaleOut() + fadeOut())
+                    },
+                    label = "fabSwitch"
+                ) { tab ->
+                    when (tab) {
+                        0 -> FloatingActionButton(
+                            onClick = { showCreateDialog = true },
+                            containerColor = accentClr,
+                            contentColor = Color.White,
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = "New Book")
+                        }
+                        1 -> ExtendedFloatingActionButton(
+                            onClick = {
+                                vm.createQuickNote { note ->
+                                    context.startActivity(
+                                        Intent(context, MainActivity::class.java)
+                                            .putExtra(MainActivity.EXTRA_NOTE_ID, note.id)
+                                            .putExtra(MainActivity.EXTRA_BOOK_ID, note.bookId)
+                                    )
+                                }
+                            },
+                            icon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                            text = { Text("Quick Note") },
+                            containerColor = accentClr,
+                            contentColor = Color.White,
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        else -> Box(Modifier)
                     }
-                } else if (selectedNavTab == 1) {
-                    ExtendedFloatingActionButton(
-                        onClick = {
-                            vm.createQuickNote { note ->
-                                context.startActivity(
-                                    Intent(context, MainActivity::class.java)
-                                        .putExtra(MainActivity.EXTRA_NOTE_ID, note.id)
-                                        .putExtra(MainActivity.EXTRA_BOOK_ID, note.bookId)
-                                )
-                            }
-                        },
-                        icon = { Icon(Icons.Default.Add, contentDescription = "Quick Note") },
-                        text = { Text("Quick Note") },
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.frostedFab(hazeState)
-                    )
                 }
             }
         ) { padding ->
@@ -481,6 +509,87 @@ fun HomeScreen(
                                 allNotes = allNotes,
                                 allFolders = allFolders
                             )
+                        }
+                    }
+                }
+
+                // ── Right stats panel — swipe from right edge or tap Info button ──
+                AnimatedVisibility(
+                    visible = rightPanelVisible,
+                    enter = fadeIn(tween(180)),
+                    exit = fadeOut(tween(180))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.38f))
+                            .clickable { rightPanelVisible = false }
+                    )
+                }
+                AnimatedVisibility(
+                    visible = rightPanelVisible,
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                    enter = slideInHorizontally(
+                        initialOffsetX = { it },
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioLowBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        )
+                    ),
+                    exit = slideOutHorizontally(
+                        targetOffsetX = { it },
+                        animationSpec = tween(200)
+                    )
+                ) {
+                    val totalWords = remember(allNotes) {
+                        allNotes.sumOf { n -> n.content.split("\\s+".toRegex()).count { it.isNotBlank() } }
+                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(0.72f)
+                            .frostedPanel(hazeState)
+                            .padding(horizontal = 20.dp, vertical = 24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Overview", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            IconButton(onClick = { rightPanelVisible = false }) {
+                                Icon(Icons.Default.Close, contentDescription = "Close")
+                            }
+                        }
+                        HorizontalDivider()
+                        StatPanelRow(Icons.Default.Book, "Books", "${allBooks.size}")
+                        StatPanelRow(Icons.Default.StickyNote2, "Notes", "${allNotes.size}")
+                        StatPanelRow(Icons.Default.TextFields, "Total words", "$totalWords")
+                        StatPanelRow(Icons.Default.FolderOpen, "Folders", "${allFolders.size}")
+                        Spacer(modifier = Modifier.weight(1f))
+                        HorizontalDivider()
+                        Text(
+                            "Quick Actions",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        TextButton(
+                            onClick = { rightPanelVisible = false; onOpenSettings() },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Settings")
+                        }
+                        TextButton(
+                            onClick = { rightPanelVisible = false; onOpenThemes() },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Palette, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Themes")
                         }
                     }
                 }
@@ -748,7 +857,7 @@ private fun BookGridCard(
                 DropdownMenu(
                     expanded = showMenu,
                     onDismissRequest = { showMenu = false },
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+                    containerColor = LocalSolidSurface.current
                 ) {
                     DropdownMenuItem(text = { Text("Open") }, onClick = { showMenu = false; onOpen() })
                     DropdownMenuItem(text = { Text("Rename") }, onClick = { showMenu = false; onRename() })
@@ -845,8 +954,14 @@ private fun BookListRow(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("Tt $words", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
-                        Text("📄 $files", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("📁 $folders", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Icon(Icons.Default.Article, contentDescription = null, modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("$files", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("$folders", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
 
@@ -1015,5 +1130,27 @@ private fun highlightMatch(text: String, query: String): androidx.compose.ui.tex
             }
             start = index + query.length
         }
+    }
+}
+
+@Composable
+private fun StatPanelRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    value: String
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            Text(label, fontSize = 15.sp)
+        }
+        Text(value, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
     }
 }
