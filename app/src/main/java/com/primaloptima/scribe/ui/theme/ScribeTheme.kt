@@ -57,6 +57,13 @@ val LocalAppTheme = compositionLocalOf<AppTheme?> { null }
 val LocalBgAnalysisBitmap = compositionLocalOf<Bitmap?> { null }
 val LocalScreenSize = compositionLocalOf { Pair(1080f, 1920f) }
 
+/**
+ * Always holds the fully-opaque theme surface color, even when a background image
+ * is active and the color scheme's surface is set to alpha=0 for glass effects.
+ * Use this for Dropdowns, Dialogs, and any popup that must never be see-through.
+ */
+val LocalSolidSurface = compositionLocalOf { Color.White }
+
 fun autoTextColor(bg: Color): Color {
     val luminance = bg.luminance()
     return if (luminance > 0.5f) Color.Black else Color.White
@@ -64,6 +71,11 @@ fun autoTextColor(bg: Color): Color {
 
 @Composable
 fun Modifier.frostedBar(hazeState: HazeState?): Modifier {
+    // On Android 12+ (API 31+) use real GPU blur via Haze.
+    // On older Android, RenderEffect is unavailable so we fall back to a
+    // semi-transparent tint using the theme's actual surface color instead
+    // of hard-coded black, so the bar blends naturally with the active theme.
+    val solidSurface = LocalSolidSurface.current
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         if (hazeState != null) {
             this.hazeChild(state = hazeState, style = HazeMaterials.thin())
@@ -71,7 +83,28 @@ fun Modifier.frostedBar(hazeState: HazeState?): Modifier {
             this
         }
     } else {
-        this.background(Color.Black.copy(alpha = 0.4f))
+        this.background(solidSurface.copy(alpha = 0.82f))
+    }
+}
+
+/**
+ * Applies a frosted-glass effect to a FAB (or any component) when a whole-app
+ * background image is active.  On Android 12+ this is a real GPU blur via Haze;
+ * on older devices it falls back to a semi-transparent surface tint.
+ * When there is no background image the modifier is a no-op.
+ */
+@Composable
+fun Modifier.frostedFab(hazeState: HazeState?): Modifier {
+    val theme = LocalAppTheme.current
+    val solidSurface = LocalSolidSurface.current
+    val hasBgImage = theme?.bgImageUri?.isNotEmpty() == true &&
+            (theme.bgMode == "image" || theme.bgMode == "blurred")
+    return if (!hasBgImage || hazeState == null) {
+        this
+    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        this.hazeChild(state = hazeState, style = HazeMaterials.regular())
+    } else {
+        this.background(solidSurface.copy(alpha = 0.75f), shape = androidx.compose.foundation.shape.CircleShape)
     }
 }
 
@@ -160,6 +193,10 @@ fun ScribeComposeTheme(
             onPrimaryContainer = text,
             secondary = accentIcons,
             onSecondary = onPrimaryColor,
+            // KEY: secondaryContainer was unset → M3 default is purple(#E8DEF8)
+            // Setting it to surfaceVariant gives a themed, warm tint instead.
+            secondaryContainer = surfaceVariant,
+            onSecondaryContainer = text,
             tertiary = accentIcons,
             onTertiary = onPrimaryColor,
             tertiaryContainer = surfaceVariant,
@@ -170,11 +207,21 @@ fun ScribeComposeTheme(
             onSurface = text,
             surfaceVariant = surfaceVariant,
             onSurfaceVariant = text,
+            surfaceContainerLowest = bg,
+            surfaceContainerLow = bg,
             surfaceContainer = surface,
             surfaceContainerHigh = surface,
-            surfaceContainerLow = bg,
+            // KEY: surfaceContainerHighest was unset → M3 default is lavender(#E6E0E9)
+            // Card() in BOM 2026.06.00 uses this slot by default.
+            surfaceContainerHighest = surfaceVariant,
+            // Keep tonal surface tint on-theme (prevents extra purple tinting)
+            surfaceTint = accentIcons,
+            inverseSurface = text,
+            inverseOnSurface = bg,
+            inversePrimary = accentIcons,
             outline = border,
-            outlineVariant = border
+            outlineVariant = border,
+            scrim = Color.Black.copy(alpha = 0.32f)
         )
     } else {
         darkColorScheme(
@@ -184,6 +231,8 @@ fun ScribeComposeTheme(
             onPrimaryContainer = text,
             secondary = accentIcons,
             onSecondary = onPrimaryColor,
+            secondaryContainer = surfaceVariant,
+            onSecondaryContainer = text,
             tertiary = accentIcons,
             onTertiary = onPrimaryColor,
             tertiaryContainer = surfaceVariant,
@@ -194,11 +243,18 @@ fun ScribeComposeTheme(
             onSurface = text,
             surfaceVariant = surfaceVariant,
             onSurfaceVariant = text,
+            surfaceContainerLowest = bg,
+            surfaceContainerLow = bg,
             surfaceContainer = surface,
             surfaceContainerHigh = surface,
-            surfaceContainerLow = bg,
+            surfaceContainerHighest = surfaceVariant,
+            surfaceTint = accentIcons,
+            inverseSurface = text,
+            inverseOnSurface = bg,
+            inversePrimary = accentIcons,
             outline = border,
-            outlineVariant = border
+            outlineVariant = border,
+            scrim = Color.Black.copy(alpha = 0.32f)
         )
     }
 
@@ -217,26 +273,41 @@ fun ScribeComposeTheme(
 
     val showWholeAppBg = resolvedTheme.themeScope == "whole_app" && hasBgImage
 
+    // When a whole-app background image is active, surfaces must be transparent so
+    // the image shows through and the Haze blur effect works. However, we must NOT
+    // use Color.Transparent (= ARGB 0,0,0,0 — transparent BLACK) because any
+    // downstream call like surface.copy(alpha = 0.95f) would produce a near-opaque
+    // BLACK instead of the theme colour. Instead, we zero only the alpha channel
+    // while keeping the RGB channels intact, so copy(alpha = X) restores the
+    // correct colour at the requested opacity.
+    val glassySurface        = if (showWholeAppBg) animSurface.copy(alpha = 0f)        else animSurface
+    val glassySurfaceVariant = if (showWholeAppBg) animSurfaceVariant.copy(alpha = 0f) else animSurfaceVariant
+    val glassyBg             = if (showWholeAppBg) animBg.copy(alpha = 0f)             else animBg
+
     val animatedColorScheme = rawColorScheme.copy(
         primary = animPrimary,
         onPrimary = animOnPrimary,
-        primaryContainer = if (showWholeAppBg) Color.Transparent else animSurface,
+        primaryContainer = glassySurface,
         onPrimaryContainer = animOnSurface,
         secondary = animPrimary,
         onSecondary = animOnPrimary,
+        secondaryContainer = glassySurfaceVariant,
+        onSecondaryContainer = animOnSurface,
         tertiary = animPrimary,
         onTertiary = animOnPrimary,
-        tertiaryContainer = if (showWholeAppBg) Color.Transparent else animSurfaceVariant,
+        tertiaryContainer = glassySurfaceVariant,
         onTertiaryContainer = animOnSurface,
-        background = if (showWholeAppBg) Color.Transparent else animBg,
+        background = glassyBg,
         onBackground = animOnBg,
-        surface = if (showWholeAppBg) Color.Transparent else animSurface,
+        surface = glassySurface,
         onSurface = animOnSurface,
-        surfaceVariant = if (showWholeAppBg) Color.Transparent else animSurfaceVariant,
+        surfaceVariant = glassySurfaceVariant,
         onSurfaceVariant = animOnSurfaceVariant,
-        surfaceContainer = if (showWholeAppBg) Color.Transparent else animSurface,
-        surfaceContainerHigh = if (showWholeAppBg) Color.Transparent else animSurface,
-        surfaceContainerLow = if (showWholeAppBg) Color.Transparent else animBg,
+        surfaceContainerLowest = glassyBg,
+        surfaceContainerLow = glassyBg,
+        surfaceContainer = glassySurface,
+        surfaceContainerHigh = glassySurface,
+        surfaceContainerHighest = glassySurfaceVariant,
         outline = animOutline,
         outlineVariant = animOutline
     )
@@ -263,7 +334,10 @@ fun ScribeComposeTheme(
                 LocalHazeState provides hazeState,
                 LocalAppTheme provides resolvedTheme,
                 LocalBgAnalysisBitmap provides analysisBitmap,
-                LocalScreenSize provides Pair(screenWidthPx, screenHeightPx)
+                LocalScreenSize provides Pair(screenWidthPx, screenHeightPx),
+                // Always the fully-opaque surface colour — safe to use in popups
+                // and menus that must not be see-through.
+                LocalSolidSurface provides animSurface
             ) {
                 val bgOpacity = resolvedTheme.backgroundImageOpacity ?: 0.35f
                 val bgMode = resolvedTheme.bgMode
