@@ -97,7 +97,7 @@ fun Modifier.frostedBar(hazeState: HazeState?): Modifier {
 fun Modifier.frostedFab(hazeState: HazeState?): Modifier {
     val theme = LocalAppTheme.current
     val solidSurface = LocalSolidSurface.current
-    val hasBgImage = theme?.bgImageUri?.isNotEmpty() == true &&
+    val hasBgImage = theme?.backgroundImageUri?.isNotEmpty() == true &&
             (theme.bgMode == "image" || theme.bgMode == "blurred")
     return if (!hasBgImage || hazeState == null) {
         this
