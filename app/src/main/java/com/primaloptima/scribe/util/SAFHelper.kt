@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
+import java.io.File
 
 private val TEXT_EXTENSIONS = setOf("md", "mdown", "markdown", "txt")
 private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif")
@@ -35,6 +36,63 @@ object SAFHelper {
     fun releasePersistablePermission(context: Context, uri: Uri) {
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         try { context.contentResolver.releasePersistableUriPermission(uri, flags) } catch (_: Exception) {}
+    }
+
+    /**
+     * Copies a user-picked image URI into the app's private storage so it survives
+     * force-stop and process death without requiring any ongoing URI permission.
+     *
+     * Background: ActivityResultContracts.GetContent() grants only a *temporary*
+     * URI permission tied to the activity session.  takePersistableUriPermission()
+     * works for most MediaStore URIs but silently fails for Google Photos export
+     * URIs, cloud-backed providers, and some OEM gallery apps.  Copying to
+     * app-private storage (`filesDir/bg_images/`) is the only universal fix.
+     *
+     * Removes stale bg_images files beyond a rolling window of [keepCount] files
+     * so storage doesn't grow unboundedly.
+     *
+     * Returns the `file://` Uri of the copied file, or null on failure (caller
+     * should fall back to takePersistablePermission + original uri).
+     */
+    suspend fun copyBgImageToInternalStorage(
+        context: Context,
+        sourceUri: Uri,
+        keepCount: Int = 6
+    ): Uri? = withContext(Dispatchers.IO) {
+        try {
+            val dir = File(context.filesDir, "bg_images").also { it.mkdirs() }
+
+            // Determine extension from MIME type
+            val mimeType = context.contentResolver.getType(sourceUri) ?: "image/png"
+            val ext = when {
+                mimeType.contains("jpeg") || mimeType.contains("jpg") -> "jpg"
+                mimeType.contains("webp") -> "webp"
+                else -> "png"
+            }
+
+            val dest = File(dir, "theme_bg_${System.currentTimeMillis()}.$ext")
+            context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            // Prune old copies beyond keepCount, sorted oldest-first
+            dir.listFiles()
+                ?.filter { it.name.startsWith("theme_bg_") }
+                ?.sortedBy { it.lastModified() }
+                ?.dropLast(keepCount)
+                ?.forEach { it.delete() }
+
+            Uri.fromFile(dest)
+        } catch (_: Exception) {
+            // Fallback: attempt to take persistable permission on original URI
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    sourceUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) { /* best-effort */ }
+            null
+        }
     }
 
     // ── Read / Write ──────────────────────────────────────────────────────────
