@@ -1,73 +1,63 @@
 package com.primaloptima.scribe.ui.util
 
+import android.graphics.Rect
+import android.view.ViewTreeObserver
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalView
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsAnimationCompat
-import androidx.core.view.WindowInsetsCompat
 
 /**
- * Returns the current keyboard height in pixels, updated every frame
- * during the keyboard open/close animation (Level 3 approach).
+ * Returns true when the software keyboard is visible.
  *
- * How it works:
- *   - WindowInsetsAnimationCompat.Callback fires on every animation frame
- *     while the keyboard is sliding in or out, giving us the exact height
- *     at each step. This is what makes the toolbar move smoothly with the
- *     keyboard instead of just snapping in or out.
- *   - ViewCompat.setOnApplyWindowInsetsListener fires when the keyboard
- *     fully opens or fully closes, catching the final state in case the
- *     animation callback misses it.
+ * Uses a two-layer approach for maximum reliability across all Android versions:
  *
- * Returns:
- *   0           → keyboard is fully hidden
- *   positive    → keyboard is visible or currently animating (mid-slide)
+ * Layer 1 — geometry (OnPreDrawListener + getWindowVisibleDisplayFrame):
+ *   Works reliably with adjustResize on all API levels.
+ *   Threshold is 15% of screen height, which safely separates:
+ *     - navigation bar alone (~6-10%)  → false
+ *     - keyboard present (~35-55%)     → true
  *
- * On Android 11+ (API 30+): height updates every frame during animation.
- * On older Android: jumps from 0 to full height immediately — still correct,
- *   just no smooth animation. The toolbar will snap instead of slide, which
- *   is the same behavior apps had before Android 11.
+ * Layer 2 — global focus change (OnGlobalFocusChangeListener):
+ *   Backup for edge cases where the geometry misses the keyboard.
+ *   When a view gains focus the keyboard is very likely coming up.
+ *   When nothing has focus it double-checks with geometry.
  *
  * Requires: android:windowSoftInputMode="adjustResize" in AndroidManifest.xml
  */
 @Composable
-fun rememberKeyboardHeightPx(): Int {
+fun rememberKeyboardVisibility(): Boolean {
     val view = LocalView.current
-    var keyboardHeight by remember { mutableIntStateOf(0) }
+    var isVisible by remember { mutableStateOf(false) }
 
     DisposableEffect(view) {
+        val rect = Rect()
 
-        // Fires on every animation frame while keyboard is sliding in/out
-        val animationCallback = object : WindowInsetsAnimationCompat.Callback(DISPATCH_MODE_STOP) {
-            override fun onProgress(
-                insets: WindowInsetsCompat,
-                runningAnimations: List<WindowInsetsAnimationCompat>
-            ): WindowInsetsCompat {
-                keyboardHeight = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
-                return insets
+        // Layer 1: geometry — reliable on adjustResize
+        val preDrawListener = ViewTreeObserver.OnPreDrawListener {
+            view.getWindowVisibleDisplayFrame(rect)
+            val screenHeight = view.rootView.height
+            val keyboardHeight = screenHeight - rect.bottom
+            isVisible = keyboardHeight > screenHeight * 0.15f
+            true
+        }
+
+        // Layer 2: focus — catches edge cases on some devices
+        val focusListener = ViewTreeObserver.OnGlobalFocusChangeListener { _, newFocus ->
+            if (newFocus != null && newFocus.isShown) {
+                isVisible = true
+            } else if (newFocus == null) {
+                view.getWindowVisibleDisplayFrame(rect)
+                val screenHeight = view.rootView.height
+                isVisible = (screenHeight - rect.bottom) > screenHeight * 0.15f
             }
         }
 
-        // Fires when keyboard fully opens or fully closes (catches final state)
-        ViewCompat.setOnApplyWindowInsetsListener(view) { _, insets ->
-            keyboardHeight = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
-            insets
-        }
-
-        ViewCompat.setWindowInsetsAnimationCallback(view, animationCallback)
+        view.viewTreeObserver.addOnPreDrawListener(preDrawListener)
+        view.viewTreeObserver.addOnGlobalFocusChangeListener(focusListener)
 
         onDispose {
-            ViewCompat.setWindowInsetsAnimationCallback(view, null)
-            ViewCompat.setOnApplyWindowInsetsListener(view, null)
+            view.viewTreeObserver.removeOnPreDrawListener(preDrawListener)
+            view.viewTreeObserver.removeOnGlobalFocusChangeListener(focusListener)
         }
     }
-
-    return keyboardHeight
+    return isVisible
 }
-
-/**
- * Convenience wrapper — returns true when keyboard is visible or animating in.
- * Drop-in replacement for the old rememberKeyboardVisibility().
- */
-@Composable
-fun rememberKeyboardVisibility(): Boolean = rememberKeyboardHeightPx() > 0
