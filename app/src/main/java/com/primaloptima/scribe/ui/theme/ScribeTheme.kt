@@ -108,6 +108,37 @@ fun Modifier.frostedFab(hazeState: HazeState?): Modifier {
     }
 }
 
+/**
+ * Applies a frosted-glass effect to side panels, navigation drawers, and any
+ * overlay that should feel "elevated glass" over the content behind it.
+ *
+ * When a background image is active:
+ *   - API 31+ : real GPU blur via Haze (hazeChild with a regular material)
+ *   - API < 31: high-opacity solid surface tint using the theme's actual surface
+ *               colour so the fallback blends naturally on every theme
+ *
+ * When there is no background image the modifier is a no-op (the drawer's own
+ * containerColor provides the background).
+ *
+ * Usage: Set `drawerContainerColor = Color.Transparent` on the drawer/sheet
+ * and add `.frostedPanel(hazeState)` to its `modifier`.
+ */
+@Composable
+fun Modifier.frostedPanel(hazeState: HazeState?): Modifier {
+    val theme = LocalAppTheme.current
+    val solidSurface = LocalSolidSurface.current
+    val hasBgImage = theme?.backgroundImageUri?.isNotEmpty() == true &&
+            (theme.bgMode == "image" || theme.bgMode == "blurred")
+    return if (!hasBgImage || hazeState == null) {
+        this
+    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        this.hazeChild(state = hazeState, style = HazeMaterials.regular())
+    } else {
+        // Pre-API-31 fallback: near-opaque surface colour so text stays readable
+        this.background(solidSurface.copy(alpha = 0.95f))
+    }
+}
+
 fun parseComposeColor(hex: String, fallback: Color = Color.Black): Color {
     return try {
         Color(ThemeManager.parseColor(hex))
@@ -371,7 +402,19 @@ fun ScribeComposeTheme(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .background(bg.copy(alpha = bgOpacity))
+                                .background(
+                                    // On API 31+ the GPU blur handles opacity naturally.
+                                    // On older devices, compensate by increasing overlay opacity
+                                    // proportionally to the blur intensity slider so the user
+                                    // still sees a meaningful visual change when they raise it.
+                                    bg.copy(
+                                        alpha = if (bgMode == "blurred" && Build.VERSION.SDK_INT < Build.VERSION_CODES.S && blurIntensity > 0f) {
+                                            (bgOpacity + blurIntensity / 35f).coerceIn(0f, 0.90f)
+                                        } else {
+                                            bgOpacity
+                                        }
+                                    )
+                                )
                         )
                     }
 
