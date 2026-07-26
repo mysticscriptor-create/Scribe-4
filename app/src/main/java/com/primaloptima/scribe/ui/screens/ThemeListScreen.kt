@@ -34,6 +34,7 @@ import com.google.gson.GsonBuilder
 import com.primaloptima.scribe.ThemeEditActivity
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.style.TextOverflow
+import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.parseComposeColor
 import com.primaloptima.scribe.ui.theme.FontHelper
 import com.primaloptima.scribe.util.DefaultThemes
@@ -85,7 +86,8 @@ fun ThemeListScreen(
                         }
                         DropdownMenu(
                             expanded = showTopMenu,
-                            onDismissRequest = { showTopMenu = false }
+                            onDismissRequest = { showTopMenu = false },
+                            containerColor = LocalSolidSurface.current
                         ) {
                             DropdownMenuItem(
                                 text = { Text("Import Theme") },
@@ -316,7 +318,8 @@ private fun ThemeCard(
                     }
                     DropdownMenu(
                         expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
+                        onDismissRequest = { showMenu = false },
+                        containerColor = LocalSolidSurface.current
                     ) {
                         DropdownMenuItem(
                             text = { Text("Set Active") },

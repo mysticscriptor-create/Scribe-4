@@ -18,6 +18,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.primaloptima.scribe.ui.theme.LocalHazeState
+import com.primaloptima.scribe.ui.theme.LocalSolidSurface
+import com.primaloptima.scribe.ui.theme.frostedFab
 import com.primaloptima.scribe.util.model.ShortcutAction
 import com.primaloptima.scribe.viewmodel.ShortcutsViewModel
 
@@ -58,7 +61,10 @@ fun ShortcutsScreen(
                 onClick = {
                     shortcutToEdit = null
                     showEditDialog = true
-                }
+                },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.frostedFab(LocalHazeState.current)
             ) {
                 Icon(Icons.Default.Add, contentDescription = "New Shortcut")
             }
@@ -160,7 +166,11 @@ private fun ShortcutRow(
                 IconButton(onClick = { showMenu = true }) {
                     Icon(Icons.Default.MoreVert, contentDescription = null)
                 }
-                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false },
+                    containerColor = LocalSolidSurface.current
+                ) {
                     DropdownMenuItem(text = { Text("Edit") }, onClick = { showMenu = false; onEdit() })
                     DropdownMenuItem(text = { Text("Delete") }, onClick = { showMenu = false; onDelete() })
                 }

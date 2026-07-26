@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,13 +28,19 @@ import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.detectTapGestures
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import com.primaloptima.scribe.ui.theme.LocalAppTheme
 import com.primaloptima.scribe.ui.theme.LocalHazeState
+import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
+import com.primaloptima.scribe.ui.theme.frostedFab
 import com.primaloptima.scribe.ui.theme.parseComposeColor
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
 import dev.chrisbanes.haze.haze
@@ -153,8 +160,10 @@ fun HomeScreen(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
+        gesturesEnabled = true,
         drawerContent = {
             ModalDrawerSheet(
+                modifier = Modifier.requiredWidth(280.dp),
                 drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
             ) {
                 Spacer(modifier = Modifier.height(24.dp))
@@ -385,8 +394,14 @@ fun HomeScreen(
                 }
             },
             floatingActionButton = {
+                val hazeState = LocalHazeState.current
                 if (selectedNavTab == 0) {
-                    FloatingActionButton(onClick = { showCreateDialog = true }) {
+                    FloatingActionButton(
+                        onClick = { showCreateDialog = true },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.frostedFab(hazeState)
+                    ) {
                         Icon(Icons.Default.Add, contentDescription = "New Book")
                     }
                 } else if (selectedNavTab == 1) {
@@ -401,7 +416,10 @@ fun HomeScreen(
                             }
                         },
                         icon = { Icon(Icons.Default.Add, contentDescription = "Quick Note") },
-                        text = { Text("Quick Note") }
+                        text = { Text("Quick Note") },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.frostedFab(hazeState)
                     )
                 }
             }
@@ -638,16 +656,62 @@ private fun BookGridCard(
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
+    // ── Idle floating bob ────────────────────────────────────────────────
+    val infiniteTransition = rememberInfiniteTransition(label = "float")
+    val floatY by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = -5f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "floatY"
+    )
+
+    // ── Press 3-D tilt ───────────────────────────────────────────────────
+    var isPressed by remember { mutableStateOf(false) }
+    var pressOffset by remember { mutableStateOf(Offset.Zero) }
+
+    val targetRotX = if (isPressed) (pressOffset.y - 100f) * 0.04f else 0f
+    val targetRotY = if (isPressed) -(pressOffset.x - 80f) * 0.04f else 0f
+    val targetScale = if (isPressed) 0.95f else 1f
+    val targetElev  = if (isPressed) 2f else 12f
+
+    val rotX  by animateFloatAsState(targetRotX,  spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "rotX")
+    val rotY  by animateFloatAsState(targetRotY,  spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "rotY")
+    val scale by animateFloatAsState(targetScale, spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "scale")
+    val elev  by animateFloatAsState(targetElev,  tween(200), label = "elev")
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onOpen() },
+            .graphicsLayer {
+                translationY    = floatY
+                scaleX          = scale
+                scaleY          = scale
+                rotationX       = rotX
+                rotationY       = rotY
+                cameraDistance  = 10f * density
+                shadowElevation = elev.dp.toPx()
+            }
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = { offset ->
+                        isPressed = true
+                        pressOffset = offset
+                        tryAwaitRelease()
+                        isPressed = false
+                    },
+                    onTap = { onOpen() }
+                )
+            },
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.72f)
+                .shadow(elev.dp, RoundedCornerShape(8.dp))
                 .clip(RoundedCornerShape(8.dp))
         ) {
             if (book.coverUri != null) {
@@ -793,7 +857,7 @@ private fun BookListRow(
                     DropdownMenu(
                         expanded = showMenu,
                         onDismissRequest = { showMenu = false },
-                        containerColor = MaterialTheme.colorScheme.surface
+                        containerColor = LocalSolidSurface.current
                     ) {
                         DropdownMenuItem(text = { Text("Open") }, onClick = { showMenu = false; onOpen() })
                         DropdownMenuItem(text = { Text("Rename") }, onClick = { showMenu = false; onRename(book) })

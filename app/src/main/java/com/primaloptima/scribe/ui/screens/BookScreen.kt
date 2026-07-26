@@ -32,7 +32,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import com.primaloptima.scribe.ui.theme.LocalHazeState
+import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
+import com.primaloptima.scribe.ui.theme.frostedFab
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
 import dev.chrisbanes.haze.haze
 import androidx.compose.ui.text.font.FontWeight
@@ -211,7 +213,8 @@ fun BookScreen(
                         }
                         DropdownMenu(
                             expanded = showSortMenu,
-                            onDismissRequest = { showSortMenu = false }
+                            onDismissRequest = { showSortMenu = false },
+                            containerColor = LocalSolidSurface.current
                         ) {
                             DropdownMenuItem(
                                 text = { Text("Change Book Cover") },
@@ -301,7 +304,9 @@ fun BookScreen(
                                             isFabExpanded = false
                                             showCreateNoteDialog = true
                                         },
-                                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.frostedFab(LocalHazeState.current)
                                     ) {
                                         Icon(Icons.Default.Description, contentDescription = "New Text File")
                                     }
@@ -328,7 +333,10 @@ fun BookScreen(
                                             isFabExpanded = false
                                             showCreateFolderDialog = true
                                         },
-                                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                                        // Was secondaryContainer (M3 purple default) — now uses themed accent
+                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.frostedFab(LocalHazeState.current)
                                     ) {
                                         Icon(Icons.Default.CreateNewFolder, contentDescription = "New Folder")
                                     }
@@ -339,7 +347,10 @@ fun BookScreen(
                         val rotation by animateFloatAsState(targetValue = if (isFabExpanded) 45f else 0f)
 
                         FloatingActionButton(
-                            onClick = { isFabExpanded = !isFabExpanded }
+                            onClick = { isFabExpanded = !isFabExpanded },
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.frostedFab(LocalHazeState.current)
                         ) {
                             Icon(
                                 Icons.Default.Add,
@@ -828,7 +839,11 @@ private fun NoteListRow(
                     IconButton(onClick = { showMenu = true }) {
                         Icon(Icons.Default.MoreVert, contentDescription = null)
                     }
-                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false },
+                        containerColor = LocalSolidSurface.current
+                    ) {
                         DropdownMenuItem(text = { Text("Open") }, onClick = { showMenu = false; onClick() })
                         DropdownMenuItem(text = { Text("Open in Floating Window") }, onClick = { showMenu = false; onOpenFloat() })
                         DropdownMenuItem(text = { Text("Rename") }, onClick = { showMenu = false; onRename() })

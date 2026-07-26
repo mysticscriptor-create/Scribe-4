@@ -35,6 +35,9 @@ import coil3.compose.AsyncImage
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.primaloptima.scribe.data.WorldEntry
+import com.primaloptima.scribe.ui.theme.LocalHazeState
+import com.primaloptima.scribe.ui.theme.LocalSolidSurface
+import com.primaloptima.scribe.ui.theme.frostedFab
 import com.primaloptima.scribe.viewmodel.SheetsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -78,7 +81,12 @@ fun SheetsScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showCreateDialog = true }) {
+            FloatingActionButton(
+                onClick = { showCreateDialog = true },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.frostedFab(LocalHazeState.current)
+            ) {
                 Icon(Icons.Default.Add, contentDescription = "Add Entry")
             }
         }
@@ -324,7 +332,11 @@ private fun WorldEntryCard(
                 IconButton(onClick = { showMenu = true }) {
                     Icon(Icons.Default.MoreVert, contentDescription = null)
                 }
-                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false },
+                    containerColor = LocalSolidSurface.current
+                ) {
                     DropdownMenuItem(text = { Text("Edit") }, onClick = { showMenu = false; onClick() })
                     DropdownMenuItem(text = { Text("Duplicate") }, onClick = { showMenu = false; onDuplicate() })
                     DropdownMenuItem(text = { Text("Delete") }, onClick = { showMenu = false; onDelete() })
@@ -606,7 +618,7 @@ private fun WorldEntryDetailDialog(
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            colors = CardDefaults.cardColors(containerColor = LocalSolidSurface.current.copy(alpha = 0.95f))
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
                                 Text(
@@ -630,7 +642,7 @@ private fun WorldEntryDetailDialog(
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            colors = CardDefaults.cardColors(containerColor = LocalSolidSurface.current.copy(alpha = 0.95f))
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
                                 fields.forEachIndexed { idx, field ->
@@ -662,9 +674,12 @@ private fun WorldEntryDetailDialog(
                 // Edit Floating Action Button in Bottom Right
                 FloatingActionButton(
                     onClick = onEdit,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(4.dp)
+                        .frostedFab(LocalHazeState.current)
                 ) {
                     Icon(Icons.Default.Edit, contentDescription = "Edit Sheet")
                 }
