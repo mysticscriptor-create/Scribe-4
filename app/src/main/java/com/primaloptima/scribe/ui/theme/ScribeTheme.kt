@@ -49,6 +49,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import com.primaloptima.scribe.util.DefaultThemes
+import com.primaloptima.scribe.util.PrefsManager
 import com.primaloptima.scribe.util.ThemeDataStoreRepo
 import com.primaloptima.scribe.util.ThemeManager
 import com.primaloptima.scribe.util.model.AppTheme
@@ -66,6 +67,8 @@ val LocalHazeState = compositionLocalOf<HazeState?> { null }
 val LocalAppTheme = compositionLocalOf<AppTheme?> { null }
 val LocalBgAnalysisBitmap = compositionLocalOf<Bitmap?> { null }
 val LocalScreenSize = compositionLocalOf { Pair(1080f, 1920f) }
+/** True when the user has opted into CPU/RenderScript blur on pre-API-31 devices. */
+val LocalLegacyBlur = compositionLocalOf { false }
 
 /**
  * Always holds the fully-opaque theme surface color, even when a background image
@@ -81,12 +84,10 @@ fun autoTextColor(bg: Color): Color {
 
 @Composable
 fun Modifier.frostedBar(hazeState: HazeState?): Modifier {
-    // On Android 12+ (API 31+) use real GPU blur via Haze.
-    // On older Android, RenderEffect is unavailable so we fall back to a
-    // semi-transparent tint using the theme's actual surface color instead
-    // of hard-coded black, so the bar blends naturally with the active theme.
     val solidSurface = LocalSolidSurface.current
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    val legacyBlur = LocalLegacyBlur.current
+    val blurAllowed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || legacyBlur
+    return if (blurAllowed) {
         if (hazeState != null) {
             this.hazeEffect(state = hazeState, style = HazeMaterials.thin())
         } else {
@@ -107,11 +108,13 @@ fun Modifier.frostedBar(hazeState: HazeState?): Modifier {
 fun Modifier.frostedFab(hazeState: HazeState?): Modifier {
     val theme = LocalAppTheme.current
     val solidSurface = LocalSolidSurface.current
+    val legacyBlur = LocalLegacyBlur.current
+    val blurAllowed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || legacyBlur
     val hasBgImage = theme?.backgroundImageUri?.isNotEmpty() == true &&
             (theme.bgMode == "image" || theme.bgMode == "blurred")
     return if (!hasBgImage || hazeState == null) {
         this
-    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    } else if (blurAllowed) {
         this.hazeEffect(state = hazeState, style = HazeMaterials.regular())
     } else {
         this.background(solidSurface.copy(alpha = 0.75f), shape = androidx.compose.foundation.shape.CircleShape)
@@ -137,14 +140,15 @@ fun Modifier.frostedFab(hazeState: HazeState?): Modifier {
 fun Modifier.frostedPanel(hazeState: HazeState?): Modifier {
     val theme = LocalAppTheme.current
     val solidSurface = LocalSolidSurface.current
+    val legacyBlur = LocalLegacyBlur.current
+    val blurAllowed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || legacyBlur
     val hasBgImage = theme?.backgroundImageUri?.isNotEmpty() == true &&
             (theme.bgMode == "image" || theme.bgMode == "blurred")
     return if (!hasBgImage || hazeState == null) {
         this
-    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    } else if (blurAllowed) {
         this.hazeEffect(state = hazeState, style = HazeMaterials.regular())
     } else {
-        // Pre-API-31 fallback: near-opaque surface colour so text stays readable
         this.background(solidSurface.copy(alpha = 0.95f))
     }
 }
@@ -170,6 +174,8 @@ fun FrostedDialog(
     val hazeState = LocalHazeState.current
     val solidSurface = LocalSolidSurface.current
     val theme = LocalAppTheme.current
+    val legacyBlur = LocalLegacyBlur.current
+    val blurAllowed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || legacyBlur
     val hasBgImage = theme?.backgroundImageUri?.isNotEmpty() == true &&
             (theme.bgMode == "image" || theme.bgMode == "blurred")
     val shape = androidx.compose.foundation.shape.RoundedCornerShape(28.dp)
@@ -184,8 +190,7 @@ fun FrostedDialog(
             ) { onDismissRequest() },
         contentAlignment = Alignment.Center
     ) {
-        val containerModifier = if (hasBgImage && hazeState != null &&
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val containerModifier = if (hasBgImage && hazeState != null && blurAllowed) {
             Modifier
                 .hazeEffect(state = hazeState, style = HazeMaterials.regular())
                 .clip(shape)
@@ -449,6 +454,10 @@ fun ScribeComposeTheme(
     }
 
     val hazeState = rememberHazeState(blurEnabled = true)
+    val prefsManager = remember { PrefsManager(context) }
+    val legacyBlur = remember { mutableStateOf(prefsManager.legacyBlurEnabled) }
+    // Re-read whenever the composable re-enters (e.g. after returning from ThemeEditScreen)
+    LaunchedEffect(Unit) { legacyBlur.value = prefsManager.legacyBlurEnabled }
 
     MaterialTheme(
         colorScheme = animatedColorScheme,
@@ -458,6 +467,7 @@ fun ScribeComposeTheme(
                 LocalAppTheme provides resolvedTheme,
                 LocalBgAnalysisBitmap provides analysisBitmap,
                 LocalScreenSize provides Pair(screenWidthPx, screenHeightPx),
+                LocalLegacyBlur provides legacyBlur.value,
                 // Always the fully-opaque surface colour — safe to use in popups
                 // and menus that must not be see-through.
                 LocalSolidSurface provides animSurface
