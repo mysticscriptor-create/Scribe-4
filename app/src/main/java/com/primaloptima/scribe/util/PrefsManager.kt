@@ -38,6 +38,10 @@ class PrefsManager(context: Context) {
         set(v) = if (v == null) prefs.edit().remove(KEY_EXTERNAL_ROOT).apply()
                  else prefs.edit().putString(KEY_EXTERNAL_ROOT, v).apply()
 
+    var legacyBlurEnabled: Boolean
+        get() = prefs.getBoolean(KEY_LEGACY_BLUR, false)
+        set(v) = prefs.edit().putBoolean(KEY_LEGACY_BLUR, v).apply()
+
     // ── Themes ────────────────────────────────────────────────────────────────
 
     /** JSON array of custom Theme objects */
@@ -154,6 +158,7 @@ class PrefsManager(context: Context) {
     // ── Constants ─────────────────────────────────────────────────────────────
 
     companion object {
+        private const val KEY_LEGACY_BLUR           = "scribe.legacyBlur.v1"
         private const val KEY_ACTIVE_NOTE        = "scribe.activeNote.v1"
         private const val KEY_VAULT_NAME         = "scribe.vaultName.v1"
         private const val KEY_EXTERNAL_ROOT      = "scribe.externalRoot.v1"
