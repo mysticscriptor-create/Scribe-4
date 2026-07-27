@@ -1277,9 +1277,12 @@ fun MainEditorScreen(
 
                                         Surface(
                                             shape = CircleShape,
-                                            color = MaterialTheme.colorScheme.primaryContainer,
+                                            color = MaterialTheme.colorScheme.primaryContainer.copy(
+                                                alpha = if (LocalHazeState.current != null) 0.55f else 1f
+                                            ),
                                             shadowElevation = 6.dp,
                                             modifier = Modifier
+                                                .frostedFab(LocalHazeState.current)
                                                 .pointerInput(Unit) {
                                                     detectDragGestures { change, dragAmount ->
                                                         change.consume()

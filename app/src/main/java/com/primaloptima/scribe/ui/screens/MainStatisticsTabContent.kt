@@ -38,8 +38,11 @@ import com.primaloptima.scribe.data.Note
 import com.primaloptima.scribe.util.PrefsManager
 import com.primaloptima.scribe.util.ThemeDataStoreRepo
 import com.primaloptima.scribe.ui.theme.LocalAppTheme
+import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.parseComposeColor
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
+import com.primaloptima.scribe.ui.theme.frostedCard
+import com.primaloptima.scribe.ui.theme.FrostedDialog
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -163,8 +166,11 @@ private fun DetailedStatisticsTab(
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         // Chart Card
+        val hazeState = LocalHazeState.current
         ElevatedCard(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .frostedCard(hazeState, shape = RoundedCornerShape(16.dp)),
             shape = RoundedCornerShape(16.dp),
             elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp),
             colors = CardDefaults.elevatedCardColors(
@@ -219,7 +225,9 @@ private fun DetailedStatisticsTab(
         ) {
             // Card 1: Today's Words
             ElevatedCard(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .frostedCard(hazeState, shape = RoundedCornerShape(12.dp)),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.elevatedCardColors(
                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
@@ -252,7 +260,9 @@ private fun DetailedStatisticsTab(
 
             // Card 2: Book Count
             ElevatedCard(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .frostedCard(hazeState, shape = RoundedCornerShape(12.dp)),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.elevatedCardColors(
                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
@@ -285,7 +295,9 @@ private fun DetailedStatisticsTab(
 
             // Card 3: Streak
             ElevatedCard(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .frostedCard(hazeState, shape = RoundedCornerShape(12.dp)),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.elevatedCardColors(
                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
@@ -319,7 +331,9 @@ private fun DetailedStatisticsTab(
 
         // Daily Goal Progress Section
         ElevatedCard(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .frostedCard(hazeState, shape = RoundedCornerShape(12.dp)),
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.elevatedCardColors(
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
@@ -388,7 +402,7 @@ private fun DetailedStatisticsTab(
 
     if (showGoalDialog) {
         var inputGoal by remember { mutableStateOf(dailyGoal.toString()) }
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { showGoalDialog = false },
             title = { Text("Set Daily Word Goal") },
             text = {
