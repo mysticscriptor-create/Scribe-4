@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
@@ -32,6 +33,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -150,6 +152,45 @@ fun Modifier.frostedPanel(hazeState: HazeState?): Modifier {
         this.hazeEffect(state = hazeState, style = HazeMaterials.regular())
     } else {
         this.background(solidSurface.copy(alpha = 0.95f))
+    }
+}
+
+/**
+ * Frosted glass for Card composables (ElevatedCard, Card, etc).
+ * When a background image is active this clips to [shape] and applies hazeEffect.
+ * When no background image is active it returns the card's normal solid surface color,
+ * so on plain-color themes the cards look identical to before.
+ *
+ * Usage:
+ *   ElevatedCard(
+ *       colors = CardDefaults.elevatedCardColors(
+ *           containerColor = if (hasBgImage) Color.Transparent else surface.copy(alpha = 0.92f)
+ *       ),
+ *       modifier = Modifier.frostedCard(hazeState)
+ *   )
+ */
+@Composable
+fun Modifier.frostedCard(
+    hazeState: HazeState?,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(16.dp),
+    solidAlpha: Float = 0.92f
+): Modifier {
+    val theme = LocalAppTheme.current
+    val solidSurface = LocalSolidSurface.current
+    val legacyBlur = LocalLegacyBlur.current
+    val blurAllowed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || legacyBlur
+    val hasBgImage = theme?.backgroundImageUri?.isNotEmpty() == true &&
+            (theme.bgMode == "image" || theme.bgMode == "blurred")
+    return if (!hasBgImage || hazeState == null) {
+        this
+    } else if (blurAllowed) {
+        this
+            .clip(shape)
+            .hazeEffect(state = hazeState, style = HazeMaterials.regular())
+    } else {
+        this
+            .clip(shape)
+            .background(solidSurface.copy(alpha = solidAlpha))
     }
 }
 
@@ -476,14 +517,59 @@ fun ScribeComposeTheme(
                 val bgMode = resolvedTheme.bgMode
                 val blurIntensity = resolvedTheme.blurIntensity
 
+                // On API < 31 we can't use RenderEffect on a live composable, so we
+                // pre-blur the source bitmap once using RenderScript / box blur and
+                // display that pre-blurred bitmap instead.
+                val needsSoftwareBlur = bgMode == "blurred" &&
+                        blurIntensity > 0f &&
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+                        bgUri != null
+
+                val softwareBlurredModel by produceState<android.graphics.Bitmap?>(
+                    initialValue = null,
+                    key1 = bgUri,
+                    key2 = blurIntensity,
+                    key3 = needsSoftwareBlur
+                ) {
+                    if (!needsSoftwareBlur || bgUri == null) {
+                        value = null
+                        return@produceState
+                    }
+                    value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            val loader = coil3.ImageLoader(context)
+                            val req = coil3.request.ImageRequest.Builder(context)
+                                .data(bgUri)
+                                .size(coil3.size.Size(800, 800))
+                                .allowHardware(false)
+                                .build()
+                            val result = loader.execute(req)
+                            val bmp = (result as? coil3.request.SuccessResult)
+                                ?.image
+                                ?.let { (it as? coil3.BitmapImage)?.bitmap }
+                            bmp?.let {
+                                val radiusPx = (blurIntensity * 0.8f).toInt().coerceIn(1, 25)
+                                com.primaloptima.scribe.util.BitmapBlur.blurBitmap(context, it, radiusPx)
+                            }
+                        } catch (_: Exception) { null }
+                    }
+                }
+
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(if (showWholeAppBg) Color.Transparent else animBg)
                 ) {
                     if (showWholeAppBg) {
+                        // Display either the pre-blurred bitmap (API < 31) or the
+                        // live image with RenderEffect (API 31+)
+                        val imageModel = if (needsSoftwareBlur && softwareBlurredModel != null) {
+                            softwareBlurredModel
+                        } else {
+                            bgUri
+                        }
                         AsyncImage(
-                            model = bgUri,
+                            model = imageModel,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
@@ -505,19 +591,7 @@ fun ScribeComposeTheme(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .background(
-                                    // On API 31+ the GPU blur handles opacity naturally.
-                                    // On older devices, compensate by increasing overlay opacity
-                                    // proportionally to the blur intensity slider so the user
-                                    // still sees a meaningful visual change when they raise it.
-                                    bg.copy(
-                                        alpha = if (bgMode == "blurred" && Build.VERSION.SDK_INT < Build.VERSION_CODES.S && blurIntensity > 0f) {
-                                            (bgOpacity + blurIntensity / 35f).coerceIn(0f, 0.90f)
-                                        } else {
-                                            bgOpacity
-                                        }
-                                    )
-                                )
+                                .background(bg.copy(alpha = bgOpacity))
                         )
                     }
 
