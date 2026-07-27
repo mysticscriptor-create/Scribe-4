@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.primaloptima.scribe.ScribeApp
 import com.primaloptima.scribe.data.NoteVersion
+import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.util.MarkdownUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -144,7 +145,7 @@ fun HistoryScreen(
             SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault()).format(Date(ver.timestamp))
         }
 
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { selectedVersion = null },
             title = {
                 Column {
@@ -186,7 +187,7 @@ fun HistoryScreen(
     }
 
     if (showConfirmRestoreDialog && selectedVersion != null) {
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { showConfirmRestoreDialog = false },
             title = { Text("Confirm Restore") },
             text = { Text("Are you sure you want to replace current note content with this saved version?") },

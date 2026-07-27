@@ -35,6 +35,7 @@ import coil3.compose.AsyncImage
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.primaloptima.scribe.data.WorldEntry
+import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedFab
@@ -167,7 +168,7 @@ fun SheetsScreen(
         var name by remember { mutableStateOf("") }
         var type by remember { mutableStateOf(if (selectedCategory == "All") "character" else selectedCategory) }
 
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { showCreateDialog = false },
             title = { Text("New World Sheet") },
             text = {
@@ -231,7 +232,7 @@ fun SheetsScreen(
     }
 
     entryToDelete?.let { entry ->
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { entryToDelete = null },
             title = { Text("Delete Entry?") },
             text = { Text("Are you sure you want to delete \"${entry.name}\"?") },
@@ -373,7 +374,7 @@ private fun EditWorldEntryDialog(
         uri?.let { imageUri = it.toString() }
     }
 
-    AlertDialog(
+    FrostedDialog(
         onDismissRequest = onDismiss,
         title = { Text("Edit ${entry.name}") },
         text = {
@@ -504,7 +505,6 @@ private fun EditWorldEntryDialog(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WorldEntryDetailDialog(
     entry: WorldEntry,
@@ -521,170 +521,150 @@ private fun WorldEntryDetailDialog(
         }
     }
 
-    BasicAlertDialog(
-        onDismissRequest = onDismiss
-    ) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-        ) {
-            Box(
+    FrostedDialog(
+        onDismissRequest = onDismiss,
+        title = null,
+        text = {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp)
+                    .heightIn(max = 500.dp)
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    // Top Close Button
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
+                // Large Avatar Image at Top Center
+                if (!entry.imageUri.isNullOrEmpty()) {
+                    AsyncImage(
+                        model = entry.imageUri,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(110.dp)
+                            .clip(CircleShape)
+                            .border(3.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(110.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center
                     ) {
-                        IconButton(onClick = onDismiss) {
-                            Icon(Icons.Default.Close, contentDescription = "Close")
-                        }
-                    }
-
-                    // Large Avatar Image at Top Center
-                    if (!entry.imageUri.isNullOrEmpty()) {
-                        AsyncImage(
-                            model = entry.imageUri,
+                        Icon(
+                            when (entry.type.lowercase()) {
+                                "character" -> Icons.Default.Person
+                                "location" -> Icons.Default.Place
+                                "faction" -> Icons.Default.Group
+                                "item" -> Icons.Default.Category
+                                "lore" -> Icons.Default.MenuBook
+                                else -> Icons.Default.Description
+                            },
                             contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(110.dp)
-                                .clip(CircleShape)
-                                .border(3.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(54.dp)
                         )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .size(110.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primaryContainer),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                when (entry.type.lowercase()) {
-                                    "character" -> Icons.Default.Person
-                                    "location" -> Icons.Default.Place
-                                    "faction" -> Icons.Default.Group
-                                    "item" -> Icons.Default.Category
-                                    "lore" -> Icons.Default.MenuBook
-                                    else -> Icons.Default.Description
-                                },
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.size(54.dp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Bold Large Heading Name
+                Text(
+                    text = entry.name,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Category Badge
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Text(
+                        text = entry.type.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() },
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+                    )
+                }
+
+                if (entry.summary.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = LocalSolidSurface.current.copy(alpha = 0.95f))
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = "Overview",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = entry.summary,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         }
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Bold Large Heading Name
-                    Text(
-                        text = entry.name,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    // Category Badge
-                    Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer
+                if (fields.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = LocalSolidSurface.current.copy(alpha = 0.95f))
                     ) {
-                        Text(
-                            text = entry.type.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() },
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
-                        )
-                    }
-
-                    if (entry.summary.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = LocalSolidSurface.current.copy(alpha = 0.95f))
-                        ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                Text(
-                                    text = "Overview",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = entry.summary,
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        }
-                    }
-
-                    if (fields.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = LocalSolidSurface.current.copy(alpha = 0.95f))
-                        ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                fields.forEachIndexed { idx, field ->
-                                    if (idx > 0) {
-                                        HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
-                                    }
-                                    Column(modifier = Modifier.fillMaxWidth()) {
-                                        Text(
-                                            text = field.label,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Text(
-                                            text = field.value.ifBlank { "-" },
-                                            fontSize = 14.sp,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            fields.forEachIndexed { idx, field ->
+                                if (idx > 0) {
+                                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+                                }
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text(
+                                        text = field.label,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = field.value.ifBlank { "-" },
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
                                 }
                             }
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(60.dp)) // Extra space for FAB
-                }
-
-                // Edit Floating Action Button in Bottom Right
-                FloatingActionButton(
-                    onClick = onEdit,
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(4.dp)
-                        .frostedFab(LocalHazeState.current)
-                ) {
-                    Icon(Icons.Default.Edit, contentDescription = "Edit Sheet")
                 }
             }
+        },
+        confirmButton = {
+            Button(
+                onClick = onEdit,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                )
+            ) {
+                Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Edit")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
         }
-    }
+    )
 }
 

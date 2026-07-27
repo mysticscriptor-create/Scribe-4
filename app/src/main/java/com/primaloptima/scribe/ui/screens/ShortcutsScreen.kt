@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedFab
@@ -112,7 +113,7 @@ fun ShortcutsScreen(
     }
 
     shortcutToDelete?.let { shortcut ->
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { shortcutToDelete = null },
             title = { Text("Delete \"${shortcut.label}\"?") },
             text = { Text("Are you sure you want to delete this shortcut?") },
@@ -190,7 +191,7 @@ private fun EditShortcutDialog(
     var payload by remember { mutableStateOf(existing?.payload ?: "") }
     var closing by remember { mutableStateOf(existing?.closing ?: "") }
 
-    AlertDialog(
+    FrostedDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (existing == null) "New Shortcut" else "Edit Shortcut") },
         text = {

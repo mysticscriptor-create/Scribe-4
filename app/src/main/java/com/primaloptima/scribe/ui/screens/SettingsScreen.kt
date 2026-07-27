@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.primaloptima.scribe.ScribeApp
 import com.primaloptima.scribe.ThemeListActivity
+import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.util.WritingStats
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -168,7 +169,7 @@ fun SettingsScreen(
 
     if (showGoalDialog) {
         var goalInput by remember { mutableStateOf("$dailyGoal") }
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { showGoalDialog = false },
             title = { Text("Set Daily Word Goal") },
             text = {

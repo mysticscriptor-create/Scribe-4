@@ -34,6 +34,7 @@ import com.google.gson.GsonBuilder
 import com.primaloptima.scribe.ThemeEditActivity
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.style.TextOverflow
+import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.parseComposeColor
 import com.primaloptima.scribe.ui.theme.FontHelper
@@ -162,7 +163,7 @@ fun ThemeListScreen(
     }
 
     themeToDelete?.let { theme ->
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { themeToDelete = null },
             title = { Text("Delete \"${theme.name}\"?") },
             text = { Text("Are you sure you want to delete this theme?") },

@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.toArgb
 import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
+import com.primaloptima.scribe.ui.theme.frostedFab
 import com.primaloptima.scribe.ui.theme.frostedPanel
 import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
@@ -1317,6 +1318,7 @@ fun MainEditorScreen(
                                         modifier = Modifier
                                             .align(Alignment.BottomEnd)
                                             .padding(16.dp)
+                                            .frostedFab(LocalHazeState.current)
                                     ) {
                                         Icon(Icons.Default.FullscreenExit, contentDescription = "Exit Zen")
                                     }

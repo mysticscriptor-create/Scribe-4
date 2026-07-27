@@ -50,6 +50,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.google.gson.GsonBuilder
 import com.primaloptima.scribe.ui.theme.FontHelper
+import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.parseComposeColor
 import com.primaloptima.scribe.util.DefaultThemes
 import com.primaloptima.scribe.util.SAFHelper
@@ -607,7 +608,7 @@ fun ThemeEditScreen(
     // Emoji Picker Dialog
     if (showEmojiDialog) {
         val emojis = listOf("🖊️", "📖", "🌙", "⭐", "🌿", "🔥", "🌊", "🌸", "🏔️", "🌌", "📜", "✨", "🎭", "🌅", "🍂", "❄️", "🌙", "🪶", "🕯️", "🌺")
-        AlertDialog(
+        FrostedDialog(
             onDismissRequest = { showEmojiDialog = false },
             title = { Text("Theme Badge") },
             text = {
@@ -948,7 +949,6 @@ private fun CustomColorPicker(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ColorPickerBottomSheet(
     title: String,
@@ -956,63 +956,60 @@ private fun ColorPickerBottomSheet(
     onDismiss: () -> Unit,
     onColorSelected: (String) -> Unit
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectedColor by remember { mutableStateOf(parseComposeColor(initialHex, Color.Red)) }
     var hexText by remember { mutableStateOf(initialHex) }
 
-    ModalBottomSheet(
+    FrostedDialog(
         onDismissRequest = onDismiss,
-        sheetState = sheetState
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-
-            Box(
-                modifier = Modifier
-                    .size(80.dp)
-                    .clip(CircleShape)
-                    .background(selectedColor)
-                    .border(2.dp, MaterialTheme.colorScheme.outline, CircleShape)
-            )
-
-            Text(
-                text = hexText.uppercase(),
-                fontWeight = FontWeight.Bold,
-                fontSize = 18.sp,
-                textAlign = TextAlign.Center
-            )
-
-            CustomColorPicker(
+        title = { Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+        text = {
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                currentColor = selectedColor,
-                onColorChanged = { color ->
-                    selectedColor = color
-                    val argb = color.toArgb()
-                    hexText = String.format("#%06X", 0xFFFFFF and argb)
-                }
-            )
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .clip(CircleShape)
+                        .background(selectedColor)
+                        .border(2.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                )
 
-            OutlinedTextField(
-                value = hexText,
-                onValueChange = { input ->
-                    hexText = input
-                    if (input.startsWith("#") && (input.length == 7 || input.length == 9)) {
-                        try {
-                            selectedColor = parseComposeColor(input)
-                        } catch (_: Exception) {}
+                Text(
+                    text = hexText.uppercase(),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    textAlign = TextAlign.Center
+                )
+
+                CustomColorPicker(
+                    modifier = Modifier.fillMaxWidth(),
+                    currentColor = selectedColor,
+                    onColorChanged = { color ->
+                        selectedColor = color
+                        val argb = color.toArgb()
+                        hexText = String.format("#%06X", 0xFFFFFF and argb)
                     }
-                },
-                label = { Text("Hex Color") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+                )
 
+                OutlinedTextField(
+                    value = hexText,
+                    onValueChange = { input ->
+                        hexText = input
+                        if (input.startsWith("#") && (input.length == 7 || input.length == 9)) {
+                            try {
+                                selectedColor = parseComposeColor(input)
+                            } catch (_: Exception) {}
+                        }
+                    },
+                    label = { Text("Hex Color") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
             Button(
                 onClick = {
                     onColorSelected(hexText)
@@ -1023,7 +1020,7 @@ private fun ColorPickerBottomSheet(
                 Text("Done")
             }
         }
-    }
+    )
 }
 
 private fun exportThemeJson(context: Context, theme: AppTheme) {
