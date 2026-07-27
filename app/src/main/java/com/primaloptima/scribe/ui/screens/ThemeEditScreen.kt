@@ -67,6 +67,8 @@ fun ThemeEditScreen(
 ) {
     val context = LocalContext.current
     val themes by vm.themes.observeAsState(emptyList())
+    val prefsManager = remember { com.primaloptima.scribe.util.PrefsManager(context) }
+    var legacyBlurEnabled by remember { mutableStateOf(prefsManager.legacyBlurEnabled) }
 
     val originalTheme = remember(themes, themeId) {
         themes.firstOrNull { it.id == themeId } ?: DefaultThemes.all.first()
@@ -259,6 +261,38 @@ fun ThemeEditScreen(
                                 onValueChange = { bgOpacity = it },
                                 valueRange = 0.0f..0.90f
                             )
+
+                            // Only shown on Android 11 and below
+                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                                Spacer(Modifier.height(8.dp))
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            "CPU Blur (Legacy)",
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Text(
+                                            "Enables frosted glass on Android 11 and below via " +
+                                            "RenderScript. May cause lag during animations.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                    Spacer(Modifier.width(12.dp))
+                                    Switch(
+                                        checked = legacyBlurEnabled,
+                                        onCheckedChange = { enabled ->
+                                            legacyBlurEnabled = enabled
+                                            prefsManager.legacyBlurEnabled = enabled
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
