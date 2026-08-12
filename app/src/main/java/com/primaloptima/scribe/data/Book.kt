@@ -1,10 +1,14 @@
 package com.primaloptima.scribe.data
 
+import androidx.compose.runtime.Immutable
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
+// @Immutable: all fields are val primitives/Strings. See Note.kt for full rationale.
+// Issue #2 / 2A fix.
 /** Top-level container: a named book/project that holds notes and folders. */
+@Immutable
 @Entity(tableName = "books")
 data class Book(
     @PrimaryKey val id: String,

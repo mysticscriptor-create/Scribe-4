@@ -12,14 +12,25 @@ interface NoteVersionDao {
     @Query("SELECT * FROM note_versions WHERE note_id = :noteId ORDER BY timestamp DESC")
     fun observeVersions(noteId: String): Flow<List<NoteVersion>>
 
-    @Query("SELECT * FROM note_versions WHERE note_id = :noteId ORDER BY timestamp DESC LIMIT 30")
-    suspend fun getVersions(noteId: String): List<NoteVersion>
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(version: NoteVersion)
 
-    @Query("DELETE FROM note_versions WHERE note_id = :noteId AND id NOT IN (SELECT id FROM note_versions WHERE note_id = :noteId ORDER BY timestamp DESC LIMIT 30)")
-    suspend fun trimOldVersions(noteId: String)
+    /**
+     * Trim versions of a specific type down to [keep] most recent.
+     * Called separately for "auto" and "manual" so each type has its own cap.
+     */
+    @Query("""
+        DELETE FROM note_versions
+        WHERE note_id = :noteId
+          AND type = :type
+          AND id NOT IN (
+              SELECT id FROM note_versions
+              WHERE note_id = :noteId AND type = :type
+              ORDER BY timestamp DESC
+              LIMIT :keep
+          )
+    """)
+    suspend fun trimByType(noteId: String, type: String, keep: Int)
 
     @Query("DELETE FROM note_versions WHERE note_id = :noteId")
     suspend fun deleteByNoteId(noteId: String)

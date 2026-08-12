@@ -8,6 +8,14 @@ import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
+// Phase 1-B: projection for the one-time word-count backfill
+data class NoteIdContent(val id: String, val content: String)
+
+// GROUP BY result projections — one row per book
+data class BookWordCount(val bookId: String, val total: Int)
+data class BookNoteCount(val bookId: String, val count: Int)
+data class BookFolderCount(val bookId: String, val count: Int)
+
 @Dao
 interface NoteDao {
 
@@ -48,6 +56,18 @@ interface NoteDao {
     @Query("UPDATE notes SET content = :content, updated_at = :updatedAt WHERE id = :id")
     suspend fun updateContent(id: String, content: String, updatedAt: Long)
 
+    // Phase 1-B: update content + word_count together — called from EditorViewModel.saveContent()
+    @Query("UPDATE notes SET content = :content, word_count = :wordCount, updated_at = :updatedAt WHERE id = :id")
+    suspend fun updateContentAndWordCount(id: String, content: String, wordCount: Int, updatedAt: Long)
+
+    // Phase 1-B: backfill — only touches rows that still have word_count = 0
+    @Query("UPDATE notes SET word_count = :count WHERE id = :id AND word_count = 0")
+    suspend fun updateWordCount(id: String, count: Int)
+
+    // Phase 1-B: used by the startup backfill coroutine in ScribeApp
+    @Query("SELECT id, content FROM notes")
+    suspend fun getAllIdAndContent(): List<NoteIdContent>
+
     @Query("UPDATE notes SET name = :name, updated_at = :updatedAt WHERE id = :id")
     suspend fun updateName(id: String, name: String, updatedAt: Long)
 
@@ -80,6 +100,42 @@ interface NoteDao {
 
     @Query("SELECT * FROM notes WHERE book_id = :bookId AND (name LIKE '%' || :query || '%' OR content LIKE '%' || :query || '%') ORDER BY updated_at DESC LIMIT 200")
     suspend fun searchInBook(bookId: String, query: String): List<Note>
+
+    // ── Aggregate counts (DB does the math — no Kotlin looping in UI) ────────
+    //
+    // These let HomeViewModel ask SQLite for a single number instead of loading
+    // all notes into memory and summing in Kotlin. Only the rows for the
+    // requested book/folder are touched, so editing one note doesn't re-sum
+    // every other book.
+
+    /** Total stored word count for notes in a specific folder inside a book. */
+    @Query("SELECT COALESCE(SUM(word_count), 0) FROM notes WHERE book_id = :bookId AND folder_path = :folderPath")
+    fun observeWordCountByFolder(bookId: String, folderPath: String): Flow<Int>
+
+    /** Number of notes in a specific folder inside a book. */
+    @Query("SELECT COUNT(*) FROM notes WHERE book_id = :bookId AND folder_path = :folderPath")
+    fun observeNoteCountByFolder(bookId: String, folderPath: String): Flow<Int>
+
+    /**
+     * Vault-wide total word count — sum of word_count across all notes.
+     * Used by HomeScreen sidebar panel to replace allNotes.sumOf { it.wordCount }.
+     */
+    @Query("SELECT COALESCE(SUM(word_count), 0) FROM notes")
+    fun observeVaultWordCount(): Flow<Int>
+
+    // ── GROUP BY aggregates (1 query for all books — replaces N per-book flows) ─
+
+    /** Word count totals for every book in one query. */
+    @Query("SELECT book_id as bookId, COALESCE(SUM(word_count), 0) as total FROM notes GROUP BY book_id")
+    fun observeWordCountsByBook(): Flow<List<BookWordCount>>
+
+    /** Note counts for every book in one query. */
+    @Query("SELECT book_id as bookId, COUNT(*) as count FROM notes GROUP BY book_id")
+    fun observeNoteCountsByBook(): Flow<List<BookNoteCount>>
+
+    /** Non-root folder counts for every book in one query. */
+    @Query("SELECT book_id as bookId, COUNT(*) as count FROM folders WHERE path != '/' GROUP BY book_id")
+    fun observeFolderCountsByBook(): Flow<List<BookFolderCount>>
 
     // ── Folders ───────────────────────────────────────────────────────────────
 
@@ -115,4 +171,26 @@ interface NoteDao {
 
     @Query("DELETE FROM folders")
     suspend fun deleteAllFolders()
+
+    // ── Fix 6: Reactive folder word totals (Wordmap) ─────────────────────────
+
+    /**
+     * Word count per (book_id, folder_path) pair — reads notes.word_count.
+     * Fix 6: replaces the one-shot suspend getWordCountPerFolder() + LaunchedEffect
+     * pattern in DetailedWordmapTab. Emits a fresh list whenever any note's
+     * word_count changes, so the Wordmap stays current without manual refresh.
+     * 
+     * Exposed as HomeViewModel.folderWordTotals: StateFlow<Map<String,Int>>
+     * so the composable uses collectAsStateWithLifecycle() instead of
+     * LaunchedEffect + mutableStateOf.
+     */
+    @Query("""
+        SELECT book_id, folder_path,
+               COALESCE(SUM(word_count), 0) AS total
+        FROM notes
+        GROUP BY book_id, folder_path
+    """)
+    fun observeWordCountPerFolder(): Flow<List<FolderWordRow>>
 }
+
+    // NOTE: FolderWordRow is defined in StatRow.kt

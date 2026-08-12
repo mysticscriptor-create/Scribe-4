@@ -14,5 +14,12 @@ data class NoteVersion(
     @ColumnInfo(name = "note_id") val noteId: String,
     val content: String,
     @ColumnInfo(name = "word_count") val wordCount: Int,
-    val timestamp: Long = System.currentTimeMillis()
-)
+    val timestamp: Long = System.currentTimeMillis(),
+    /** "auto" = triggered on session end, "manual" = writer tapped the checkpoint button */
+    val type: String = TYPE_AUTO
+) {
+    companion object {
+        const val TYPE_AUTO   = "auto"
+        const val TYPE_MANUAL = "manual"
+    }
+}

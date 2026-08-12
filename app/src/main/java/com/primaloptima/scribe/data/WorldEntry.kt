@@ -1,5 +1,6 @@
 package com.primaloptima.scribe.data
 
+import androidx.compose.runtime.Immutable
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
@@ -7,7 +8,10 @@ import androidx.room.PrimaryKey
 /**
  * A character sheet or location sheet entry.
  * Fields are serialised as JSON via Converters.
+ * @Immutable: all fields are val primitives/Strings. See Note.kt for full rationale.
+ * Issue #2 / 2A fix.
  */
+@Immutable
 @Entity(tableName = "world_entries")
 data class WorldEntry(
     @PrimaryKey val id: String,
