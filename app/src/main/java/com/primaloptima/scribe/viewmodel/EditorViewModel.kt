@@ -3,65 +3,85 @@ package com.primaloptima.scribe.viewmodel
 import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.LiveData
-import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.primaloptima.scribe.ScribeApp
+import com.primaloptima.scribe.util.AppJson
 import com.primaloptima.scribe.data.Note
-import com.primaloptima.scribe.util.HistoryManager
-import com.primaloptima.scribe.util.MarkdownUtil
-import com.primaloptima.scribe.util.SAFHelper
+import com.primaloptima.scribe.data.NoteVersion
 import com.primaloptima.scribe.util.DefaultThemes
-import com.primaloptima.scribe.util.ThemeDataStoreRepo
-import com.primaloptima.scribe.util.WritingStats
+import com.primaloptima.scribe.util.MarkdownUtil
+import com.primaloptima.scribe.util.RecoveryManager
+import com.primaloptima.scribe.util.SAFHelper
 import com.primaloptima.scribe.util.model.AppTheme
 import com.primaloptima.scribe.util.model.ExternalRoot
-import com.primaloptima.scribe.util.model.HistorySnapshot
+import kotlinx.serialization.decodeFromString
+import com.primaloptima.scribe.util.model.FloatingWindow
 import com.primaloptima.scribe.util.model.OutlineEntry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-class EditorViewModel(application: Application) : AndroidViewModel(application) {
+class EditorViewModel(
+    application: Application,
+    private val savedState: SavedStateHandle
+) : AndroidViewModel(application) {
+
+    private companion object {
+        const val KEY_LAST_SAVED_CONTENT = "last_saved_content"
+        const val KEY_LAST_WORD_COUNT    = "last_word_count"
+        const val KEY_LAST_SNAPSHOT_WC   = "last_snapshot_word_count"
+        const val KEY_PENDING_CONTENT    = "pending_content"
+    }
 
     private val app = application as ScribeApp
-    private val prefs = app.prefs
     private val db = app.database
+    private val dataStore = app.dataStore
     private val themeManager = app.themeManager
-    private val dataStoreRepo = ThemeDataStoreRepo(application)
-    private val historyManager = HistoryManager(prefs)
-    val writingStats = WritingStats(prefs)
+
+    // ── Date helpers ──────────────────────────────────────────────────────────
+
+    private val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    private fun todayStr(): String = dateFmt.format(Date())
 
     // ── Active note ───────────────────────────────────────────────────────────
 
-    private val _activeNote = MutableLiveData<Note?>()
-    val activeNote: LiveData<Note?> = _activeNote
+    private val _activeNote = MutableStateFlow<Note?>(null)
+    val activeNote: StateFlow<Note?> = _activeNote.asStateFlow()
 
-    private val _outline = MutableLiveData<List<OutlineEntry>>(emptyList())
-    val outline: LiveData<List<OutlineEntry>> = _outline
+    private val _outline = MutableStateFlow<List<OutlineEntry>>(emptyList())
+    val outline: StateFlow<List<OutlineEntry>> = _outline.asStateFlow()
 
     // ── Floating Windows & Pinned Slots ────────────────────────────────────────
 
-    private val _floatingWindows = MutableLiveData<List<com.primaloptima.scribe.util.model.FloatingWindow>>(emptyList())
-    val floatingWindows: LiveData<List<com.primaloptima.scribe.util.model.FloatingWindow>> = _floatingWindows
+    private val _floatingWindows = MutableStateFlow<List<FloatingWindow>>(emptyList())
+    val floatingWindows: StateFlow<List<FloatingWindow>> = _floatingWindows.asStateFlow()
 
-    private val _pinnedTopNotes = MutableLiveData<List<String>>(emptyList())
-    val pinnedTopNotes: LiveData<List<String>> = _pinnedTopNotes
+    private val _pinnedTopNotes = MutableStateFlow<List<String>>(emptyList())
+    val pinnedTopNotes: StateFlow<List<String>> = _pinnedTopNotes.asStateFlow()
 
-    private val _pinnedTopIndex = MutableLiveData<Int>(0)
-    val pinnedTopIndex: LiveData<Int> = _pinnedTopIndex
+    private val _pinnedTopIndex = MutableStateFlow(0)
+    val pinnedTopIndex: StateFlow<Int> = _pinnedTopIndex.asStateFlow()
 
-    private val _pinnedBottomNotes = MutableLiveData<List<String>>(emptyList())
-    val pinnedBottomNotes: LiveData<List<String>> = _pinnedBottomNotes
+    private val _pinnedBottomNotes = MutableStateFlow<List<String>>(emptyList())
+    val pinnedBottomNotes: StateFlow<List<String>> = _pinnedBottomNotes.asStateFlow()
 
-    private val _pinnedBottomIndex = MutableLiveData<Int>(0)
-    val pinnedBottomIndex: LiveData<Int> = _pinnedBottomIndex
+    private val _pinnedBottomIndex = MutableStateFlow(0)
+    val pinnedBottomIndex: StateFlow<Int> = _pinnedBottomIndex.asStateFlow()
 
     fun addPinnedTop(noteId: String) {
-        val list = _pinnedTopNotes.value.orEmpty().toMutableList()
+        val list = _pinnedTopNotes.value.toMutableList()
         if (!list.contains(noteId)) {
             list.add(noteId)
             _pinnedTopNotes.value = list
@@ -72,33 +92,29 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun removePinnedTop(noteId: String) {
-        val list = _pinnedTopNotes.value.orEmpty().toMutableList()
+        val list = _pinnedTopNotes.value.toMutableList()
         list.remove(noteId)
         _pinnedTopNotes.value = list
-        val currIdx = _pinnedTopIndex.value ?: 0
-        if (list.isEmpty()) {
-            _pinnedTopIndex.value = 0
-        } else {
-            _pinnedTopIndex.value = currIdx.coerceIn(0, list.size - 1)
-        }
+        val currIdx = _pinnedTopIndex.value
+        _pinnedTopIndex.value = if (list.isEmpty()) 0 else currIdx.coerceIn(0, list.size - 1)
     }
 
     fun prevPinnedTop() {
-        val list = _pinnedTopNotes.value.orEmpty()
+        val list = _pinnedTopNotes.value
         if (list.size <= 1) return
-        val curr = _pinnedTopIndex.value ?: 0
+        val curr = _pinnedTopIndex.value
         _pinnedTopIndex.value = if (curr > 0) curr - 1 else list.size - 1
     }
 
     fun nextPinnedTop() {
-        val list = _pinnedTopNotes.value.orEmpty()
+        val list = _pinnedTopNotes.value
         if (list.size <= 1) return
-        val curr = _pinnedTopIndex.value ?: 0
+        val curr = _pinnedTopIndex.value
         _pinnedTopIndex.value = if (curr < list.size - 1) curr + 1 else 0
     }
 
     fun addPinnedBottom(noteId: String) {
-        val list = _pinnedBottomNotes.value.orEmpty().toMutableList()
+        val list = _pinnedBottomNotes.value.toMutableList()
         if (!list.contains(noteId)) {
             list.add(noteId)
             _pinnedBottomNotes.value = list
@@ -109,36 +125,32 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun removePinnedBottom(noteId: String) {
-        val list = _pinnedBottomNotes.value.orEmpty().toMutableList()
+        val list = _pinnedBottomNotes.value.toMutableList()
         list.remove(noteId)
         _pinnedBottomNotes.value = list
-        val currIdx = _pinnedBottomIndex.value ?: 0
-        if (list.isEmpty()) {
-            _pinnedBottomIndex.value = 0
-        } else {
-            _pinnedBottomIndex.value = currIdx.coerceIn(0, list.size - 1)
-        }
+        val currIdx = _pinnedBottomIndex.value
+        _pinnedBottomIndex.value = if (list.isEmpty()) 0 else currIdx.coerceIn(0, list.size - 1)
     }
 
     fun prevPinnedBottom() {
-        val list = _pinnedBottomNotes.value.orEmpty()
+        val list = _pinnedBottomNotes.value
         if (list.size <= 1) return
-        val curr = _pinnedBottomIndex.value ?: 0
+        val curr = _pinnedBottomIndex.value
         _pinnedBottomIndex.value = if (curr > 0) curr - 1 else list.size - 1
     }
 
     fun nextPinnedBottom() {
-        val list = _pinnedBottomNotes.value.orEmpty()
+        val list = _pinnedBottomNotes.value
         if (list.size <= 1) return
-        val curr = _pinnedBottomIndex.value ?: 0
+        val curr = _pinnedBottomIndex.value
         _pinnedBottomIndex.value = if (curr < list.size - 1) curr + 1 else 0
     }
 
     fun openFloatingWindow(noteId: String) {
-        val current = _floatingWindows.value.orEmpty().toMutableList()
+        val current = _floatingWindows.value.toMutableList()
         if (current.none { it.noteId == noteId }) {
             current.add(
-                com.primaloptima.scribe.util.model.FloatingWindow(
+                FloatingWindow(
                     id = System.currentTimeMillis().toString(),
                     noteId = noteId,
                     x = 80f,
@@ -153,89 +165,117 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun closeFloatingWindow(windowId: String) {
-        val current = _floatingWindows.value.orEmpty().filter { it.id != windowId }
-        _floatingWindows.value = current
+        _floatingWindows.value = _floatingWindows.value.filter { it.id != windowId }
     }
 
     fun toggleCollapseFloatingWindow(windowId: String) {
-        val current = _floatingWindows.value.orEmpty().map {
+        _floatingWindows.value = _floatingWindows.value.map {
             if (it.id == windowId) it.copy(collapsed = !it.collapsed) else it
         }
-        _floatingWindows.value = current
     }
 
     fun moveFloatingWindow(windowId: String, x: Float, y: Float) {
-        val current = _floatingWindows.value.orEmpty().map {
+        _floatingWindows.value = _floatingWindows.value.map {
             if (it.id == windowId) it.copy(x = x, y = y) else it
         }
-        _floatingWindows.value = current
     }
 
     // ── Theme ─────────────────────────────────────────────────────────────────
 
-    private val _theme = MutableLiveData<AppTheme>()
-    val theme: LiveData<AppTheme> = _theme
+    private val _theme = MutableStateFlow<AppTheme?>(null)
+    val theme: StateFlow<AppTheme?> = _theme.asStateFlow()
 
     // ── Word count ────────────────────────────────────────────────────────────
 
-    private val _wordCount = MutableLiveData(0)
-    val wordCount: LiveData<Int> = _wordCount
+    private val _wordCount = MutableStateFlow(0)
+    val wordCount: StateFlow<Int> = _wordCount.asStateFlow()
 
-    private val _charCount = MutableLiveData(0)
-    val charCount: LiveData<Int> = _charCount
+    private val _charCount = MutableStateFlow(0)
+    val charCount: StateFlow<Int> = _charCount.asStateFlow()
 
-    private val _readingTime = MutableLiveData(0)
-    val readingTime: LiveData<Int> = _readingTime
+    private val _readingTime = MutableStateFlow(0)
+    val readingTime: StateFlow<Int> = _readingTime.asStateFlow()
 
     // ── Goal ──────────────────────────────────────────────────────────────────
 
-    private val _goalProgress = MutableLiveData(0f)
-    val goalProgress: LiveData<Float> = _goalProgress
+    private val _goalProgress = MutableStateFlow(0f)
+    val goalProgress: StateFlow<Float> = _goalProgress.asStateFlow()
 
-    private val _goalReached = MutableLiveData(false)
-    val goalReached: LiveData<Boolean> = _goalReached
+    private val _goalReached = MutableStateFlow(false)
+    val goalReached: StateFlow<Boolean> = _goalReached.asStateFlow()
+
+    // Reactive DataStore-backed daily goal (kept — goal setting lives in DataStore).
+    private val _dailyGoalState = dataStore.dailyGoalFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 500)
 
     // ── Recovery ──────────────────────────────────────────────────────────────
 
-    private val _recoveryAvailable = MutableLiveData(false)
-    val recoveryAvailable: LiveData<Boolean> = _recoveryAvailable
+    private val _recoveryAvailable = MutableStateFlow(false)
+    val recoveryAvailable: StateFlow<Boolean> = _recoveryAvailable.asStateFlow()
 
     // ── SAF external folder ───────────────────────────────────────────────────
 
-    private val _externalRoot = MutableLiveData<ExternalRoot?>()
-    val externalRoot: LiveData<ExternalRoot?> = _externalRoot
+    private val _externalRoot = MutableStateFlow<ExternalRoot?>(null)
+    val externalRoot: StateFlow<ExternalRoot?> = _externalRoot.asStateFlow()
 
-    private val _externalLoading = MutableLiveData(false)
-    val externalLoading: LiveData<Boolean> = _externalLoading
+    private val _externalLoading = MutableStateFlow(false)
+    val externalLoading: StateFlow<Boolean> = _externalLoading.asStateFlow()
 
     // ── Autosave ──────────────────────────────────────────────────────────────
 
     private var autosaveJob: Job? = null
-    private var lastSavedContent: String = ""
-    private var lastWordCount: Int = 0
+    private var statsJob: Job? = null
+    // Bug 4: debounce RecoveryManager writes (was firing on every keystroke).
+    private var recoveryJob: Job? = null
+
+    // Bug 3: Back these four fields with SavedStateHandle so they survive
+    // process death. All existing reads/writes use the same property names —
+    // the backing change is fully transparent to the rest of the class.
+    private var lastSavedContent: String
+        get() = savedState[KEY_LAST_SAVED_CONTENT] ?: ""
+        set(v) { savedState[KEY_LAST_SAVED_CONTENT] = v }
+
+    private var lastWordCount: Int
+        get() = savedState[KEY_LAST_WORD_COUNT] ?: 0
+        set(v) { savedState[KEY_LAST_WORD_COUNT] = v }
+
+    /** Word count at the time of the last auto-snapshot — used for the min-words gate. */
+    private var lastSnapshotWordCount: Int
+        get() = savedState[KEY_LAST_SNAPSHOT_WC] ?: 0
+        set(v) { savedState[KEY_LAST_SNAPSHOT_WC] = v }
+
+    // Bug 1: track latest content so flushPendingContent() can flush without
+    // needing the text passed in from ScribeActivity.
+    private var pendingContent: String
+        get() = savedState[KEY_PENDING_CONTENT] ?: ""
+        set(v) { savedState[KEY_PENDING_CONTENT] = v }
+
     private val AUTOSAVE_DEBOUNCE_MS = 500L
+    private val STATS_DEBOUNCE_MS    = 300L
+    private val RECOVERY_DEBOUNCE_MS = 2000L
 
     // ── Zen / UI state ────────────────────────────────────────────────────────
 
-    private val _zenMode = MutableLiveData(false)
-    val zenMode: LiveData<Boolean> = _zenMode
+    private val _zenMode = MutableStateFlow(false)
+    val zenMode: StateFlow<Boolean> = _zenMode.asStateFlow()
 
-    fun toggleZen() { _zenMode.value = !(_zenMode.value ?: false) }
+    fun toggleZen() { _zenMode.value = !_zenMode.value }
     fun setZen(v: Boolean) { _zenMode.value = v }
 
-    val typewriterMode: Boolean get() = prefs.typewriterMode
+    // Typewriter mode: reactive StateFlow instead of a synchronous prefs read
+    val typewriterMode: StateFlow<Boolean> = dataStore.typewriterModeFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     // ── Init ──────────────────────────────────────────────────────────────────
 
     init {
         viewModelScope.launch {
-            dataStoreRepo.activeThemeIdFlow.collectLatest { themeId ->
+            dataStore.activeThemeIdFlow.collectLatest { themeId ->
                 _theme.value = themeManager.allThemes()
                     .firstOrNull { it.id == themeId }
                     ?: DefaultThemes.all.first()
             }
         }
-        writingStats.reconcileStreak()
         loadExternalRoot()
     }
 
@@ -245,13 +285,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private var loadNoteJob: Job? = null
 
     fun loadNote(noteId: String) {
-        // Guard: if the requested note is already active or a load is in flight
-        // for the same note, don't launch a duplicate coroutine.
         if (_activeNote.value?.id == noteId) return
         if (loadNoteJob?.isActive == true) return
         loadNoteJob = viewModelScope.launch {
             val note = withContext(Dispatchers.IO) { db.noteDao().getById(noteId) } ?: return@launch
-            // For SAF-backed notes, lazily read content from disk if not yet loaded
             val loaded = if (note.externalUri != null && !note.loaded) {
                 try {
                     val content = SAFHelper.readFile(getApplication(), Uri.parse(note.externalUri))
@@ -264,18 +301,22 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             _activeNote.value = loaded
             lastSavedContent = loaded.content
             lastWordCount = MarkdownUtil.countWords(loaded.content)
-            updateStats(loaded.content)
+            lastSnapshotWordCount = lastWordCount
+            updateStatsSync(loaded.content)
             checkRecovery(loaded)
+            dataStore.setActiveNoteId(loaded.id)
         }
     }
 
-    /** Clear the active note and cancel any pending autosave or in-flight load.
-     *  Call this when the active note is deleted so autosave can't resurrect it. */
     fun clearActiveNote() {
         loadNoteJob?.cancel()
         loadNoteJob = null
         autosaveJob?.cancel()
         autosaveJob = null
+        statsJob?.cancel()
+        statsJob = null
+        recoveryJob?.cancel()   // Bug 4: cancel debounced recovery write on note exit
+        recoveryJob = null
         _activeNote.value = null
         _outline.value = emptyList()
         _wordCount.value = 0
@@ -285,22 +326,67 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _recoveryAvailable.value = false
         lastSavedContent = ""
         lastWordCount = 0
+        lastSnapshotWordCount = 0
+        viewModelScope.launch { dataStore.setActiveNoteId(null) }
     }
 
-    // ── Content change (called on every autosave tick) ────────────────────────
+    // ── Content change ────────────────────────────────────────────────────────
 
     fun onContentChanged(content: String) {
+        // Bug 1: track latest content so flushPendingContent() can flush without
+        // needing the caller to pass the text in separately.
+        pendingContent = content
+
+        // 1. Cancel and reschedule autosave (debounced at 500ms)
         autosaveJob?.cancel()
         autosaveJob = viewModelScope.launch {
             delay(AUTOSAVE_DEBOUNCE_MS)
             saveContent(content)
         }
-        // Update word count and outline synchronously for responsiveness
-        updateStats(content)
-        _outline.value = MarkdownUtil.extractOutline(content)
-        // Recovery buffer — write synchronously (fast, in-memory prefs)
+
+        // 2. Stats update — debounced separately on Default dispatcher (CPU work off main thread)
+        statsJob?.cancel()
+        statsJob = viewModelScope.launch {
+            delay(STATS_DEBOUNCE_MS)
+            withContext(Dispatchers.Default) {
+                val wc = MarkdownUtil.countWords(content)
+                val cc = MarkdownUtil.countChars(content)
+                val rt = MarkdownUtil.readingTimeMinutes(content)
+                val outline = MarkdownUtil.extractOutline(content)
+                withContext(Dispatchers.Main) {
+                    _wordCount.value = wc
+                    _charCount.value = cc
+                    _readingTime.value = rt
+                    _outline.value = outline
+                }
+            }
+        }
+
+        // 3. Recovery write — Bug 4: debounced at 2s (was firing on every keystroke,
+        // causing excessive SharedPreferences I/O on older devices).
         val noteId = _activeNote.value?.id ?: return
-        prefs.setRecovery(noteId, content)
+        recoveryJob?.cancel()
+        recoveryJob = viewModelScope.launch {
+            delay(RECOVERY_DEBOUNCE_MS)
+            withContext(Dispatchers.IO) {
+                RecoveryManager.set(getApplication(), noteId, content)
+            }
+        }
+    }
+
+    /**
+     * Bug 1+5 fix: called before navigating to History (or any sub-screen) so
+     * keystrokes typed within the 500ms debounce window are not lost.
+     * Cancels the pending autosave job and immediately persists the latest content.
+     */
+    fun flushPendingContent() {
+        autosaveJob?.cancel()
+        val content = pendingContent
+        if (content.isNotEmpty() && content != lastSavedContent) {
+            viewModelScope.launch(Dispatchers.IO) {
+                saveContent(content)
+            }
+        }
     }
 
     private suspend fun saveContent(content: String) {
@@ -311,43 +397,108 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val delta = newWords - lastWordCount
         lastWordCount = newWords
 
-        // Write to Room or SAF
         withContext(Dispatchers.IO) {
             if (note.externalUri != null) {
                 try { SAFHelper.writeFile(getApplication(), Uri.parse(note.externalUri), content) }
                 catch (_: Exception) {}
             }
-            db.noteDao().updateContent(note.id, content, System.currentTimeMillis())
+            // Fix (Bug 3): Both DB writes run inside a single @Transaction so they
+            // can never diverge if the process is killed between them.
+            val today = todayStr()
+            db.writingLogDao().saveContentAndDelta(
+                noteDao    = db.noteDao(),
+                noteId     = note.id,
+                content    = content,
+                wordCount  = newWords,
+                updatedAt  = System.currentTimeMillis(),
+                date       = today,
+                bookId     = note.bookId,
+                folderPath = note.folderPath,
+                delta      = delta
+            )
+            if (delta != 0) {
+                updateGoalFromDb(today)
+            }
         }
 
-        // History snapshot (time/diff gated)
-        withContext(Dispatchers.IO) { historyManager.maybeSnapshot(note.id, content) }
-
+        // Keep _activeNote in sync with the saved content so that when Nav3
+        // recreates the Editor composition (e.g. returning from History),
+        // activeNote.content is not stale and the editor is populated correctly.
+        _activeNote.value = note.copy(content = content, updatedAt = System.currentTimeMillis())
         lastSavedContent = content
-        writingStats.recordWordDelta(delta)
-        updateGoal()
     }
 
+    // ── Goal (DB-backed, replaces DataStore-backed updateGoal) ────────────────
+
+    /**
+     * Reads today's total from writing_log and updates goal progress.
+     * Called after every save that produced a non-zero delta.
+     * Must be called from a coroutine already on IO (inside withContext(Dispatchers.IO)).
+     */
+    private suspend fun updateGoalFromDb(today: String) {
+        val goal  = _dailyGoalState.value.toFloat()
+        val words = db.writingLogDao().getTodayWords(today).toFloat()
+        _goalProgress.value = if (goal > 0) (words / goal).coerceIn(0f, 1f) else 0f
+        _goalReached.value  = words >= goal
+    }
+
+    /**
+     * Synchronous goal update used at note-load time (no writing_log read needed —
+     * today's total is not yet meaningful until the user starts editing).
+     */
+    private fun updateGoalSync() {
+        _goalProgress.value = 0f
+        _goalReached.value  = false
+    }
+
+    /**
+     * Called when the writer leaves a note (DisposableEffect onDispose).
+     * Saves an "auto" snapshot only if auto-history is enabled and the net
+     * word change since the last snapshot meets the minimum threshold.
+     */
     fun saveVersionSnapshotOnLeave(content: String) {
         val note = _activeNote.value ?: return
         if (content.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
-            val words = MarkdownUtil.countWords(content)
+            if (!dataStore.getAutoHistoryEnabled()) return@launch
+            val currentWords = MarkdownUtil.countWords(content)
+            val wordDelta = Math.abs(currentWords - lastSnapshotWordCount)
+            if (wordDelta < dataStore.getAutoHistoryMinWords()) return@launch
             db.noteVersionDao().insert(
-                com.primaloptima.scribe.data.NoteVersion(
+                NoteVersion(
                     noteId = note.id,
                     content = content,
-                    wordCount = words,
-                    timestamp = System.currentTimeMillis()
+                    wordCount = currentWords,
+                    timestamp = System.currentTimeMillis(),
+                    type = NoteVersion.TYPE_AUTO
                 )
             )
-            db.noteVersionDao().trimOldVersions(note.id)
+            db.noteVersionDao().trimByType(note.id, NoteVersion.TYPE_AUTO, dataStore.getAutoHistorySlots())
+            lastSnapshotWordCount = currentWords
         }
     }
 
-    suspend fun getNoteVersions(noteId: String): List<com.primaloptima.scribe.data.NoteVersion> {
-        return withContext(Dispatchers.IO) {
-            db.noteVersionDao().getVersions(noteId)
+    /**
+     * Called when the writer taps the checkpoint (save) button in the toolbar.
+     * Always saves regardless of word count, bypasses the min-words gate.
+     */
+    fun saveManualSnapshot(content: String) {
+        val note = _activeNote.value ?: return
+        if (content.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!dataStore.getManualCheckpointsEnabled()) return@launch
+            val words = MarkdownUtil.countWords(content)
+            db.noteVersionDao().insert(
+                NoteVersion(
+                    noteId = note.id,
+                    content = content,
+                    wordCount = words,
+                    timestamp = System.currentTimeMillis(),
+                    type = NoteVersion.TYPE_MANUAL
+                )
+            )
+            db.noteVersionDao().trimByType(note.id, NoteVersion.TYPE_MANUAL, dataStore.getManualCheckpointSlots())
+            lastSnapshotWordCount = words
         }
     }
 
@@ -360,7 +511,24 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                     try { SAFHelper.writeFile(getApplication(), Uri.parse(note.externalUri), content) }
                     catch (_: Exception) {}
                 }
-                db.noteDao().updateContent(note.id, content, System.currentTimeMillis())
+                val wc = MarkdownUtil.countWords(content)
+                // Fix (Bug 2): compute and record the delta so words written between
+                // the last autosave and app-going-to-background are not silently lost
+                // from writing_log (daily goal, charts, streaks).
+                val delta = wc - lastWordCount
+                val today = todayStr()
+                db.writingLogDao().saveContentAndDelta(
+                    noteDao    = db.noteDao(),
+                    noteId     = note.id,
+                    content    = content,
+                    wordCount  = wc,
+                    updatedAt  = System.currentTimeMillis(),
+                    date       = today,
+                    bookId     = note.bookId,
+                    folderPath = note.folderPath,
+                    delta      = delta
+                )
+                lastWordCount = wc
                 lastSavedContent = content
             }
         }
@@ -368,67 +536,81 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     // ── Stats ─────────────────────────────────────────────────────────────────
 
-    private fun updateStats(content: String) {
+    /** Synchronous stats update — called immediately when a note is loaded. */
+    private fun updateStatsSync(content: String) {
         _wordCount.value = MarkdownUtil.countWords(content)
         _charCount.value = MarkdownUtil.countChars(content)
         _readingTime.value = MarkdownUtil.readingTimeMinutes(content)
-        updateGoal()
-    }
-
-    private fun updateGoal() {
-        val goal = writingStats.dailyGoal.toFloat()
-        val today = writingStats.todayWords.toFloat()
-        _goalProgress.value = if (goal > 0) (today / goal).coerceIn(0f, 1f) else 0f
-        _goalReached.value = writingStats.goalReached
+        _outline.value = MarkdownUtil.extractOutline(content)
+        updateGoalSync()
     }
 
     // ── Recovery ──────────────────────────────────────────────────────────────
 
     private fun checkRecovery(note: Note) {
-        val saved = prefs.getRecovery(note.id) ?: return
+        val saved = RecoveryManager.get(getApplication(), note.id) ?: return
         if (saved != note.content) _recoveryAvailable.value = true
     }
 
     fun getRecoveryContent(): String? {
         val noteId = _activeNote.value?.id ?: return null
-        return prefs.getRecovery(noteId)
+        return RecoveryManager.get(getApplication(), noteId)
     }
 
     fun dismissRecovery() {
         val noteId = _activeNote.value?.id ?: return
-        prefs.clearRecovery(noteId)
+        viewModelScope.launch(Dispatchers.IO) {
+            RecoveryManager.clear(getApplication(), noteId)
+        }
         _recoveryAvailable.value = false
     }
 
     // ── History ───────────────────────────────────────────────────────────────
 
-    fun getSnapshots(): List<HistorySnapshot> {
-        val noteId = _activeNote.value?.id ?: return emptyList()
-        return historyManager.getSnapshots(noteId)
-    }
-
     fun restoreSnapshot(content: String) {
         val note = _activeNote.value ?: return
+        val restoredWc = MarkdownUtil.countWords(content)
+        // Fix (Bug 1): capture the baseline before mutating it so the corrective
+        // delta is calculated against the right value.
+        val previousWc = lastWordCount
         viewModelScope.launch(Dispatchers.IO) {
-            db.noteDao().updateContent(note.id, content, System.currentTimeMillis())
+            val today = todayStr()
+            val delta = restoredWc - previousWc
+            // Atomically update notes and write_log so both reflect the restore.
+            db.writingLogDao().saveContentAndDelta(
+                noteDao    = db.noteDao(),
+                noteId     = note.id,
+                content    = content,
+                wordCount  = restoredWc,
+                updatedAt  = System.currentTimeMillis(),
+                date       = today,
+                bookId     = note.bookId,
+                folderPath = note.folderPath,
+                delta      = delta
+            )
         }
         _activeNote.value = note.copy(content = content, updatedAt = System.currentTimeMillis())
         lastSavedContent = content
-        updateStats(content)
+        // Fix (Bug 1): reset lastWordCount so the next autosave delta is
+        // calculated from the restored baseline, not the pre-restore value.
+        lastWordCount = restoredWc
+        updateStatsSync(content)
     }
 
     // ── SAF ───────────────────────────────────────────────────────────────────
 
     private fun loadExternalRoot() {
-        val json = prefs.externalRootJson ?: return
-        try {
-            val ext = com.google.gson.Gson().fromJson(json, ExternalRoot::class.java)
-            _externalRoot.value = ext
-        } catch (_: Exception) {}
+        viewModelScope.launch {
+            val json = dataStore.getExternalRootJson() ?: return@launch
+            try {
+                val ext = AppJson.decodeFromString<ExternalRoot>(json)
+                _externalRoot.value = ext
+            } catch (_: Exception) {}
+        }
     }
 
     fun disconnectExternalFolder() {
         _externalRoot.value = null
-        prefs.externalRootJson = null
+        viewModelScope.launch { dataStore.setExternalRootJson(null) }
     }
 }

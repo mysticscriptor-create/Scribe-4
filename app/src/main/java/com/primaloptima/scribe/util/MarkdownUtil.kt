@@ -12,21 +12,41 @@ import io.noties.markwon.html.HtmlPlugin
 /**
  * Lightweight Markdown utilities — word counting, reading time, outline extraction,
  * Markwon rich rendering, and a simple HTML renderer used by export modes.
+ *
+ * Phase 4: Markwon instance is now a cached singleton.
+ * Previously, renderWithMarkwon() built a new Markwon instance on every call,
+ * which initialises 4 plugins each time — expensive in a scrolling list or editor.
+ * The singleton uses applicationContext so it never leaks an Activity.
  */
 object MarkdownUtil {
 
+    // ── Markwon singleton ─────────────────────────────────────────────────────
+
     /**
-     * Render Markdown directly onto a TextView using Markwon engine with tables,
-     * strikethroughs, task lists, and HTML support.
+     * Double-checked locking singleton — safe for concurrent access from
+     * multiple coroutines (e.g., EditorViewModel stats job + HistoryScreen).
+     * @Volatile ensures the reference is always read from main memory.
+     */
+    @Volatile private var markwonInstance: Markwon? = null
+
+    fun getMarkwon(context: Context): Markwon {
+        return markwonInstance ?: synchronized(this) {
+            markwonInstance ?: Markwon.builder(context.applicationContext)
+                .usePlugin(StrikethroughPlugin.create())
+                .usePlugin(TablePlugin.create(context.applicationContext))
+                .usePlugin(TaskListPlugin.create(context.applicationContext))
+                .usePlugin(HtmlPlugin.create())
+                .build()
+                .also { markwonInstance = it }
+        }
+    }
+
+    /**
+     * Render Markdown directly onto a TextView using the cached Markwon engine.
+     * Safe to call repeatedly — the engine is built only once.
      */
     fun renderWithMarkwon(context: Context, markdown: String, textView: TextView) {
-        val markwon = Markwon.builder(context)
-            .usePlugin(StrikethroughPlugin.create())
-            .usePlugin(TablePlugin.create(context))
-            .usePlugin(TaskListPlugin.create(context))
-            .usePlugin(HtmlPlugin.create())
-            .build()
-        markwon.setMarkdown(textView, markdown)
+        getMarkwon(context).setMarkdown(textView, markdown)
     }
 
     // ── Word / char counting ─────────────────────────────────────────────────
@@ -63,7 +83,6 @@ object MarkdownUtil {
             }
             if (level > 0) {
                 val headerText = trimmed.drop(level + 1).trim()
-                // Collect next 1-3 non-empty lines for snippet preview
                 val previewLines = mutableListOf<String>()
                 var k = idx + 1
                 while (k < lines.size && previewLines.size < 2) {
@@ -94,7 +113,6 @@ object MarkdownUtil {
             val trimmed = line.trimStart()
 
             when {
-                // Headings
                 trimmed.startsWith("#### ") -> {
                     sb.append("<h4>${inlineHtml(trimmed.drop(5))}</h4>\n"); i++
                 }
@@ -107,11 +125,9 @@ object MarkdownUtil {
                 trimmed.startsWith("# ") -> {
                     sb.append("<h1>${inlineHtml(trimmed.drop(2))}</h1>\n"); i++
                 }
-                // Blockquote
                 trimmed.startsWith("> ") -> {
                     sb.append("<blockquote>${inlineHtml(trimmed.drop(2))}</blockquote>\n"); i++
                 }
-                // Fenced code block
                 trimmed.startsWith("```") -> {
                     val lang = trimmed.drop(3).trim()
                     sb.append("<pre><code${if (lang.isNotEmpty()) " class=\"language-$lang\"" else ""}>")
@@ -121,13 +137,11 @@ object MarkdownUtil {
                         i++
                     }
                     sb.append("</code></pre>\n")
-                    i++ // skip closing ```
+                    i++
                 }
-                // HR
                 trimmed == "---" || trimmed == "***" || trimmed == "___" -> {
                     sb.append("<hr/>\n"); i++
                 }
-                // Unordered list
                 (trimmed.startsWith("- ") || trimmed.startsWith("* ")) -> {
                     sb.append("<ul>\n")
                     while (i < lines.size) {
@@ -139,7 +153,6 @@ object MarkdownUtil {
                     }
                     sb.append("</ul>\n")
                 }
-                // Ordered list
                 trimmed.matches(Regex("\\d+\\. .*")) -> {
                     sb.append("<ol>\n")
                     while (i < lines.size) {
@@ -151,12 +164,8 @@ object MarkdownUtil {
                     }
                     sb.append("</ol>\n")
                 }
-                // Blank line → paragraph break
                 trimmed.isEmpty() -> { sb.append(""); i++ }
-                // Paragraph
-                else -> {
-                    sb.append("<p>${inlineHtml(trimmed)}</p>\n"); i++
-                }
+                else -> { sb.append("<p>${inlineHtml(trimmed)}</p>\n"); i++ }
             }
         }
         return sb.toString()
@@ -188,16 +197,11 @@ $bodyHtml
 
     private fun inlineHtml(text: String): String {
         var s = escapeHtml(text)
-        // Bold + italic: ***text***
         s = s.replace(Regex("\\*\\*\\*(.+?)\\*\\*\\*"), "<strong><em>$1</em></strong>")
-        // Bold: **text**
         s = s.replace(Regex("\\*\\*(.+?)\\*\\*"), "<strong>$1</strong>")
-        // Italic: *text* or _text_
         s = s.replace(Regex("\\*(.+?)\\*"), "<em>$1</em>")
         s = s.replace(Regex("_(.+?)_"), "<em>$1</em>")
-        // Inline code: `text`
         s = s.replace(Regex("`(.+?)`"), "<code>$1</code>")
-        // Links: [text](url)
         s = s.replace(Regex("\\[(.+?)\\]\\((.+?)\\)"), "<a href=\"$2\">$1</a>")
         return s
     }

@@ -68,12 +68,47 @@ fun contrastingTextColor(
     }
 }
 
+/**
+ * Returns the correct text colour and a layout-tracking [Modifier] for a composable
+ * that sits over a background image.
+ *
+ * Fast path (preferred): when the theme has a precomputed [savedBgLuminance] (≥ 0),
+ * the colour is resolved instantly on the first frame with no bitmap analysis and no
+ * layout callback. The tracking modifier is a no-op [Modifier] in this case.
+ *
+ * Fallback path: for themes saved before [savedBgLuminance] was introduced (value = -1f),
+ * the original live bitmap-region analysis runs as before. The returned modifier MUST be
+ * attached to the composable so [onLayoutRectChanged] can fire and update bounds.
+ *
+ * Usage (same in both cases):
+ * ```
+ * val (textColor, trackingMod) = rememberAdaptiveTextColor()
+ * Text("Hello", color = textColor, modifier = Modifier.then(trackingMod))
+ * ```
+ */
 @Composable
 fun rememberAdaptiveTextColor(
     lightColor: Color = Color.White,
     darkColor: Color = Color(0xFF1A1A1A),
     fallback: Color = Color.Unspecified
 ): Pair<Color, Modifier> {
+    val theme = LocalAppTheme.current
+    val savedLum = theme?.savedBgLuminance ?: -1f
+    val hasBgImage = theme?.backgroundImageUri?.isNotEmpty() == true &&
+            (theme.bgMode == "image" || theme.bgMode == "blurred")
+
+    // ── Fast path ─────────────────────────────────────────────────────────────
+    // savedBgLuminance was computed at crop-confirm time, so it reflects the real
+    // visual background (not the theme surface colour). Available on first frame,
+    // no layout pass or bitmap scan needed.
+    if (hasBgImage && savedLum >= 0f) {
+        val color = if (savedLum < 0.45f) lightColor else darkColor
+        return Pair(color, Modifier)
+    }
+
+    // ── Fallback: live bitmap-region analysis ──────────────────────────────────
+    // Used for old themes that pre-date savedBgLuminance, and for themes with no
+    // background image (returns fallback immediately via the bitmap == null check).
     val bitmap = LocalBgAnalysisBitmap.current
     val (screenW, screenH) = LocalScreenSize.current
     if (bitmap == null) return Pair(fallback, Modifier)

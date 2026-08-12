@@ -35,16 +35,17 @@ import androidx.compose.ui.unit.sp
 import com.primaloptima.scribe.data.Book
 import com.primaloptima.scribe.data.Folder
 import com.primaloptima.scribe.data.Note
-import com.primaloptima.scribe.util.PrefsManager
-import com.primaloptima.scribe.util.ThemeDataStoreRepo
-import com.primaloptima.scribe.ui.theme.LocalAppTheme
+import com.primaloptima.scribe.ui.theme.LocalAccentColor
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.primaloptima.scribe.viewmodel.DashboardViewModel
+import com.primaloptima.scribe.viewmodel.StatsViewModel
 import com.primaloptima.scribe.ui.theme.LocalHazeState
-import com.primaloptima.scribe.ui.theme.parseComposeColor
+import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
 import com.primaloptima.scribe.ui.theme.frostedCard
+import com.primaloptima.scribe.ui.theme.frostedContainerColor
 import com.primaloptima.scribe.ui.theme.FrostedDialog
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
+
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -65,14 +66,15 @@ data class DailyWordEntry(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainStatisticsTabContent(
+    dashboardVm: DashboardViewModel,
+    statsVm: StatsViewModel,
     allBooks: List<Book>,
     allNotes: List<Note>,
-    allFolders: List<Folder>
+    allFolders: List<Folder>,
+    bookWordCounts: Map<String, Int>
 ) {
     var selectedTopTab by remember { mutableIntStateOf(0) } // 0: Statistics, 1: Wordmap
-    val activeTheme = LocalAppTheme.current
-    val accent = activeTheme?.let { parseComposeColor(it.colors.accent, MaterialTheme.colorScheme.primary) }
-        ?: MaterialTheme.colorScheme.primary
+    val accent = LocalAccentColor.current
 
     Column(modifier = Modifier.fillMaxSize()) {
         Surface(
@@ -113,8 +115,18 @@ fun MainStatisticsTabContent(
         }
 
         when (selectedTopTab) {
-            0 -> DetailedStatisticsTab(allBooks = allBooks, allNotes = allNotes)
-            1 -> DetailedWordmapTab(allBooks = allBooks, allNotes = allNotes, allFolders = allFolders)
+            0 -> DetailedStatisticsTab(
+                dashboardVm = dashboardVm,
+                statsVm = statsVm,
+                allBooks = allBooks
+            )
+            1 -> DetailedWordmapTab(
+                statsVm = statsVm,
+                allBooks = allBooks,
+                allNotes = allNotes,
+                allFolders = allFolders,
+                bookWordCounts = bookWordCounts
+            )
         }
     }
 }
@@ -122,40 +134,26 @@ fun MainStatisticsTabContent(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DetailedStatisticsTab(
-    allBooks: List<Book>,
-    allNotes: List<Note>
+    dashboardVm: DashboardViewModel,
+    statsVm: StatsViewModel,
+    allBooks: List<Book>
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val repo = remember { ThemeDataStoreRepo(context) }
-    val prefs = remember { PrefsManager(context) }
-
     var selectedRange by remember { mutableStateOf(ChartRange.WEEK) }
-    var dailyGoal by remember { mutableIntStateOf(500) }
     var showGoalDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        repo.dailyGoalFlow.collectLatest { goal ->
-            dailyGoal = goal
-        }
-    }
+    // Fix 3 & 7: streaks, todayWords are now live StateFlows (reactive to writing_log).
+    // The LaunchedEffect(Unit) that manually called refreshStreaks/refreshTodayWords
+    // is no longer needed — data arrives automatically. collectAsStateWithLifecycle()
+    // unsubscribes when the tab is off-screen (fix 7).
+    val todayWords  by dashboardVm.todayWords.collectAsStateWithLifecycle()
+    val streakCount by dashboardVm.currentStreak.collectAsStateWithLifecycle()
+    val dailyGoal   by dashboardVm.dailyGoal.collectAsStateWithLifecycle()
 
-    // Process daily entries based on selected range
-    val chartData = remember(allNotes, selectedRange) {
-        computeChartEntries(allNotes, prefs, selectedRange)
-    }
+    // Fix 4: chart data comes from writing_log via ViewModel, not computed on UI thread
+    val chartData by statsVm.chartData.collectAsStateWithLifecycle()
 
-    val todayWords = remember(allNotes) {
-        val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-        val fromPrefs = prefs.getTodayWords(todayStr)
-        val fromNotes = allNotes.filter {
-            SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(it.updatedAt)) == todayStr
-        }.sumOf { n -> n.content.split("\\s+".toRegex()).count { it.isNotBlank() } }
-        maxOf(fromPrefs, fromNotes)
-    }
-
-    val streakCount = remember(allNotes) {
-        calculateWritingStreak(allNotes, prefs)
+    LaunchedEffect(selectedRange) {
+        statsVm.loadChartData(selectedRange)
     }
 
     Column(
@@ -174,7 +172,7 @@ private fun DetailedStatisticsTab(
             shape = RoundedCornerShape(16.dp),
             elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp),
             colors = CardDefaults.elevatedCardColors(
-                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+                containerColor = frostedContainerColor(fallback = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
             )
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -190,8 +188,7 @@ private fun DetailedStatisticsTab(
                         color = MaterialTheme.colorScheme.onSurface
                     )
 
-                    val segAccent = LocalAppTheme.current?.let { parseComposeColor(it.colors.accent, MaterialTheme.colorScheme.primary) }
-                        ?: MaterialTheme.colorScheme.primary
+                    val segAccent = LocalAccentColor.current
                     SingleChoiceSegmentedButtonRow {
                         ChartRange.entries.forEachIndexed { index, range ->
                             SegmentedButton(
@@ -213,7 +210,6 @@ private fun DetailedStatisticsTab(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Combined Bar & Trend Chart Component
                 CombinedBarTrendChart(entries = chartData)
             }
         }
@@ -230,7 +226,7 @@ private fun DetailedStatisticsTab(
                     .frostedCard(hazeState, shape = RoundedCornerShape(12.dp)),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                    containerColor = frostedContainerColor(fallback = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
                 )
             ) {
                 Column(
@@ -265,7 +261,7 @@ private fun DetailedStatisticsTab(
                     .frostedCard(hazeState, shape = RoundedCornerShape(12.dp)),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                    containerColor = frostedContainerColor(fallback = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
                 )
             ) {
                 Column(
@@ -300,7 +296,7 @@ private fun DetailedStatisticsTab(
                     .frostedCard(hazeState, shape = RoundedCornerShape(12.dp)),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                    containerColor = frostedContainerColor(fallback = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
                 )
             ) {
                 Column(
@@ -336,7 +332,7 @@ private fun DetailedStatisticsTab(
                 .frostedCard(hazeState, shape = RoundedCornerShape(12.dp)),
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.elevatedCardColors(
-                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                containerColor = frostedContainerColor(fallback = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
             )
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -400,36 +396,37 @@ private fun DetailedStatisticsTab(
         }
     }
 
-    if (showGoalDialog) {
-        var inputGoal by remember { mutableStateOf(dailyGoal.toString()) }
-        FrostedDialog(
-            onDismissRequest = { showGoalDialog = false },
-            title = { Text("Set Daily Word Goal") },
-            text = {
-                OutlinedTextField(
-                    value = inputGoal,
-                    onValueChange = { inputGoal = it },
-                    label = { Text("Target Words per Day") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val parsed = inputGoal.toIntOrNull() ?: 500
-                        scope.launch {
-                            repo.setDailyGoal(parsed)
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalOneShotBitmap provides com.primaloptima.scribe.ui.theme.LocalBarBlurBitmap.current
+    ) {
+        if (showGoalDialog) {
+            var inputGoal by remember { mutableStateOf(dailyGoal.toString()) }
+            FrostedDialog(
+                onDismissRequest = { showGoalDialog = false },
+                title = { Text("Set Daily Word Goal") },
+                text = {
+                    OutlinedTextField(
+                        value = inputGoal,
+                        onValueChange = { inputGoal = it },
+                        label = { Text("Target Words per Day") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val parsed = inputGoal.toIntOrNull() ?: 500
+                            dashboardVm.setDailyGoal(parsed)
+                            showGoalDialog = false
                         }
-                        prefs.dailyGoal = parsed
-                        showGoalDialog = false
-                    }
-                ) { Text("Save") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showGoalDialog = false }) { Text("Cancel") }
-            }
-        )
+                    ) { Text("Save") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showGoalDialog = false }) { Text("Cancel") }
+                }
+            )
+        }
     }
 }
 
@@ -487,13 +484,9 @@ private fun CombinedBarTrendChart(entries: List<DailyWordEntry>) {
             val count = entries.size
             val stepX = if (count > 1) chartWidth / (count - 1) else chartWidth
 
-            // Draw horizontal faint grid lines & Y-axis labels
             val gridSteps = 4
             for (i in 0..gridSteps) {
-                val yVal = maxVal * i / gridSteps
                 val yPos = topPadding + chartHeight - (chartHeight * i / gridSteps)
-
-                // Dashed line
                 drawLine(
                     color = gridColor,
                     start = Offset(leftPadding, yPos),
@@ -503,7 +496,6 @@ private fun CombinedBarTrendChart(entries: List<DailyWordEntry>) {
                 )
             }
 
-            // Draw Bars
             val barWidth = (chartWidth / count * 0.6f).coerceIn(12f, 36f)
             val barPoints = mutableListOf<Offset>()
 
@@ -514,7 +506,6 @@ private fun CombinedBarTrendChart(entries: List<DailyWordEntry>) {
 
                 barPoints.add(Offset(xCenter, topY))
 
-                // Bar brush gradient
                 val brush = Brush.verticalGradient(
                     colors = listOf(primaryColor, primaryColor.copy(alpha = 0.4f)),
                     startY = topY,
@@ -530,7 +521,6 @@ private fun CombinedBarTrendChart(entries: List<DailyWordEntry>) {
                     cornerRadius = cornerRadius
                 )
 
-                // Highlight border if selected
                 if (selectedIndex == index) {
                     drawRoundRect(
                         color = primaryColor,
@@ -542,7 +532,6 @@ private fun CombinedBarTrendChart(entries: List<DailyWordEntry>) {
                 }
             }
 
-            // Draw Trend Line & Glow area below
             if (barPoints.size > 1) {
                 val linePath = Path()
                 val glowPath = Path()
@@ -566,7 +555,6 @@ private fun CombinedBarTrendChart(entries: List<DailyWordEntry>) {
                 glowPath.lineTo(barPoints.last().x, topPadding + chartHeight)
                 glowPath.close()
 
-                // Glow Gradient
                 drawPath(
                     path = glowPath,
                     brush = Brush.verticalGradient(
@@ -579,7 +567,6 @@ private fun CombinedBarTrendChart(entries: List<DailyWordEntry>) {
                     )
                 )
 
-                // Trend Line Stroke
                 drawPath(
                     path = linePath,
                     color = tertiaryColor,
@@ -588,7 +575,6 @@ private fun CombinedBarTrendChart(entries: List<DailyWordEntry>) {
             }
         }
 
-        // Floating Tooltip Chip if bar tapped
         selectedIndex?.let { idx ->
             if (idx in entries.indices) {
                 val entry = entries[idx]
@@ -619,12 +605,23 @@ private fun CombinedBarTrendChart(entries: List<DailyWordEntry>) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DetailedWordmapTab(
+    statsVm: StatsViewModel,
     allBooks: List<Book>,
     allNotes: List<Note>,
-    allFolders: List<Folder>
+    allFolders: List<Folder>,
+    bookWordCounts: Map<String, Int>
 ) {
-    var selectedCategory by remember { mutableIntStateOf(0) } // 0: Files, 1: Folders, 2: Books
-    var isDescendingSort by remember { mutableStateOf(true) } // true: Most Words, false: Most Recently Updated
+    var selectedCategory by remember { mutableIntStateOf(0) }
+    var isDescendingSort by remember { mutableStateOf(true) }
+
+    // Fix 6 & 7: folderWordTotals is now a live StateFlow in StatsViewModel backed by
+    // NoteDao.observeWordCountPerFolder(). The LaunchedEffect(Unit) + mutableStateOf
+    // pattern is replaced with collectAsStateWithLifecycle() — the Wordmap now
+    // updates in real time when notes are written, without requiring a screen re-entry.
+    val folderWordTotals by statsVm.folderWordTotals.collectAsStateWithLifecycle()
+
+    // Book word totals from DB — replaces allNotes.filter+sumOf in the Books category
+    val bookWordTotals = bookWordCounts
 
     Column(
         modifier = Modifier
@@ -637,8 +634,7 @@ private fun DetailedWordmapTab(
             verticalAlignment = Alignment.CenterVertically
         ) {
             val categories = listOf("Files", "Folders", "Books")
-            val wordmapAccent = LocalAppTheme.current?.let { parseComposeColor(it.colors.accent, MaterialTheme.colorScheme.primary) }
-                ?: MaterialTheme.colorScheme.primary
+            val wordmapAccent = LocalAccentColor.current
             SingleChoiceSegmentedButtonRow(modifier = Modifier.weight(1f)) {
                 categories.forEachIndexed { index, title ->
                     SegmentedButton(
@@ -670,8 +666,8 @@ private fun DetailedWordmapTab(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        val rankedItems = remember(allBooks, allNotes, allFolders, selectedCategory, isDescendingSort) {
-            computeWordmapItems(allBooks, allNotes, allFolders, selectedCategory, isDescendingSort)
+        val rankedItems = remember(allBooks, allNotes, allFolders, folderWordTotals, bookWordTotals, selectedCategory, isDescendingSort) {
+            computeWordmapItems(allBooks, allNotes, allFolders, folderWordTotals, bookWordTotals, selectedCategory, isDescendingSort)
         }
 
         if (rankedItems.isEmpty()) {
@@ -744,11 +740,17 @@ private fun AnimatedRankCard(
             animationSpec = tween(300)
         )
     ) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
+        val hazeState = LocalHazeState.current
+        ElevatedCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .frostedCard(hazeState, shape = RoundedCornerShape(12.dp)),
             shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = if (isTopRank) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
+            colors = CardDefaults.elevatedCardColors(
+                containerColor = frostedContainerColor(
+                    fallback = if (isTopRank) MaterialTheme.colorScheme.primaryContainer
+                               else MaterialTheme.colorScheme.surfaceContainer
+                )
             )
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
@@ -799,7 +801,6 @@ private fun AnimatedRankCard(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Full-width progress bar with gradient
                 val gradientBrush = Brush.horizontalGradient(
                     colors = listOf(
                         MaterialTheme.colorScheme.primary,
@@ -835,151 +836,54 @@ data class WordmapItem(
     val updatedAt: Long
 )
 
-private fun computeChartEntries(
-    notes: List<Note>,
-    prefs: PrefsManager,
-    range: ChartRange
-): List<DailyWordEntry> {
-    val cal = Calendar.getInstance()
-    val entries = mutableListOf<DailyWordEntry>()
-    val dayFmt = SimpleDateFormat("EEE", Locale.getDefault())
-    val fullFmt = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
-    val keyFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-
-    val totalDays = range.days
-
-    if (range == ChartRange.YEAR) {
-        // Group by 12 months
-        val monthFmt = SimpleDateFormat("MMM", Locale.getDefault())
-        val monthKeyFmt = SimpleDateFormat("yyyy-MM", Locale.getDefault())
-
-        for (i in 11 downTo 0) {
-            val c = Calendar.getInstance()
-            c.add(Calendar.MONTH, -i)
-            val monthKey = monthKeyFmt.format(c.time)
-            val monthLabel = monthFmt.format(c.time)
-            val fullLabel = SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(c.time)
-
-            val monthWords = notes.filter {
-                monthKeyFmt.format(Date(it.updatedAt)) == monthKey
-            }.sumOf { n -> n.content.split("\\s+".toRegex()).count { it.isNotBlank() } }
-
-            entries.add(
-                DailyWordEntry(
-                    label = monthLabel,
-                    fullDateStr = fullLabel,
-                    wordCount = monthWords,
-                    timestamp = c.timeInMillis
-                )
-            )
-        }
-    } else {
-        for (i in (totalDays - 1) downTo 0) {
-            val c = Calendar.getInstance()
-            c.add(Calendar.DAY_OF_YEAR, -i)
-            val dateKey = keyFmt.format(c.time)
-            val label = dayFmt.format(c.time)
-            val fullDate = fullFmt.format(c.time)
-
-            val prefsCount = prefs.getTodayWords(dateKey)
-            val notesCount = notes.filter {
-                keyFmt.format(Date(it.updatedAt)) == dateKey
-            }.sumOf { n -> n.content.split("\\s+".toRegex()).count { it.isNotBlank() } }
-
-            val total = maxOf(prefsCount, notesCount)
-
-            entries.add(
-                DailyWordEntry(
-                    label = label,
-                    fullDateStr = fullDate,
-                    wordCount = total,
-                    timestamp = c.timeInMillis
-                )
-            )
-        }
-    }
-
-    return entries
-}
-
-private fun calculateWritingStreak(notes: List<Note>, prefs: PrefsManager): Int {
-    val keyFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-    var streak = 0
-    val cal = Calendar.getInstance()
-
-    val todayKey = keyFmt.format(cal.time)
-    val todayNotes = notes.filter { keyFmt.format(Date(it.updatedAt)) == todayKey }
-        .sumOf { n -> n.content.split("\\s+".toRegex()).count { it.isNotBlank() } }
-    val todayTotal = maxOf(prefs.getTodayWords(todayKey), todayNotes)
-
-    if (todayTotal > 0) {
-        streak++
-    }
-
-    cal.add(Calendar.DAY_OF_YEAR, -1)
-    while (true) {
-        val dateKey = keyFmt.format(cal.time)
-        val dayNotes = notes.filter { keyFmt.format(Date(it.updatedAt)) == dateKey }
-            .sumOf { n -> n.content.split("\\s+".toRegex()).count { it.isNotBlank() } }
-        val dayTotal = maxOf(prefs.getTodayWords(dateKey), dayNotes)
-
-        if (dayTotal > 0) {
-            streak++
-            cal.add(Calendar.DAY_OF_YEAR, -1)
-        } else {
-            break
-        }
-    }
-
-    return maxOf(streak, prefs.getStreak().currentStreak)
-}
-
 private fun computeWordmapItems(
     allBooks: List<Book>,
     allNotes: List<Note>,
     allFolders: List<Folder>,
+    folderWordTotals: Map<String, Int>,  // "bookId|folderPath" -> total words, from DB
+    bookWordTotals: Map<String, Int>,    // bookId -> total words, from DB (bookWordCounts)
     category: Int,
     isDescending: Boolean
 ): List<WordmapItem> {
     val items = when (category) {
-        0 -> { // Files
+        0 -> { // Files — use DB word_count column
             allNotes.map { note ->
                 val bookTitle = allBooks.firstOrNull { it.id == note.bookId }?.title ?: "Vault"
                 val pathStr = if (note.folderPath == "/") bookTitle else "$bookTitle › ${note.folderPath.trim('/')}"
-                val count = note.content.split("\\s+".toRegex()).count { it.isNotBlank() }
                 WordmapItem(
                     id = note.id,
                     title = note.name,
                     breadcrumb = pathStr,
-                    wordCount = count,
+                    wordCount = note.wordCount,
                     updatedAt = note.updatedAt
                 )
             }
         }
-        1 -> { // Folders
+        1 -> { // Folders — Phase 5: use DB SUM from folderWordTotals instead of in-memory sumOf
             allFolders.map { folder ->
                 val bookTitle = allBooks.firstOrNull { it.id == folder.bookId }?.title ?: "Vault"
+                val key = "${folder.bookId}|${folder.path}"
                 val notesInFolder = allNotes.filter { it.bookId == folder.bookId && it.folderPath == folder.path }
-                val count = notesInFolder.sumOf { n -> n.content.split("\\s+".toRegex()).count { it.isNotBlank() } }
                 WordmapItem(
                     id = "${folder.bookId}_${folder.path}",
                     title = if (folder.path == "/") "Root Folder" else folder.path.trim('/'),
                     breadcrumb = "Book: $bookTitle",
-                    wordCount = count,
+                    wordCount = folderWordTotals[key] ?: notesInFolder.sumOf { it.wordCount },
                     updatedAt = notesInFolder.maxOfOrNull { it.updatedAt } ?: 0L
                 )
             }
         }
-        else -> { // Books
+        else -> { // Books — use DB aggregate from bookWordTotals (no in-memory loop)
             allBooks.map { book ->
-                val notesInBook = allNotes.filter { it.bookId == book.id }
-                val count = notesInBook.sumOf { n -> n.content.split("\\s+".toRegex()).count { it.isNotBlank() } }
+                val noteCount = allNotes.count { it.bookId == book.id }
+                val lastUpdated = allNotes.filter { it.bookId == book.id }
+                    .maxOfOrNull { it.updatedAt } ?: 0L
                 WordmapItem(
                     id = book.id,
                     title = book.title,
-                    breadcrumb = "${notesInBook.size} chapters / files",
-                    wordCount = count,
-                    updatedAt = notesInBook.maxOfOrNull { it.updatedAt } ?: 0L
+                    breadcrumb = "$noteCount chapters / files",
+                    wordCount = bookWordTotals[book.id] ?: 0,
+                    updatedAt = lastUpdated
                 )
             }
         }

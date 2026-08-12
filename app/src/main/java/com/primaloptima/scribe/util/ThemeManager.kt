@@ -17,25 +17,54 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.floatingactionbutton.FloatingActionButton
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.primaloptima.scribe.R
 import com.primaloptima.scribe.util.model.AppTheme
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 
 /**
- * Manages the active theme and provides helper methods for applying theme
- * colours / typefaces to views at runtime.
+ * Phase 2-C: ThemeManager migrated away from direct prefs access.
+ *
+ * ThemeManager is called synchronously from non-coroutine contexts
+ * (ThemeViewModel.reload(), applyThemeToActivity()). Rather than blocking
+ * on DataStore, we keep an in-memory cache that is seeded once at startup
+ * by ScribeApp.seedThemeManagerCache() and updated by ViewModels after
+ * every write.
+ *
+ * Phase 7 complete: all prefs fallbacks removed. Cache is the sole source of truth.
  */
 class ThemeManager(private val context: Context) {
 
-    private val prefs = (context.applicationContext as com.primaloptima.scribe.ScribeApp).prefs
-    private val gson = Gson()
+    // ── In-memory cache seeded by ScribeApp.seedThemeManagerCache() ──────────
+    // Volatile so reads from any thread see the latest write.
+    @Volatile private var cachedCustomThemesJson: String? = null
+    @Volatile private var cachedActiveThemeId: String? = null
 
-    /** All themes = built-ins + custom themes from SharedPreferences. */
+    /**
+     * Called once from ScribeApp after DataStore has emitted its first values.
+     * After this, allThemes() and activeTheme() read from the cache instead of prefs.
+     */
+    fun onDataStoreReady(customJson: String, activeId: String) {
+        cachedCustomThemesJson = customJson
+        cachedActiveThemeId = activeId
+    }
+
+    /**
+     * Called by ThemeViewModel after every save/delete/setActive so the cache
+     * stays in sync without a round-trip through DataStore.
+     */
+    fun updateCache(customJson: String, activeId: String) {
+        cachedCustomThemesJson = customJson
+        cachedActiveThemeId = activeId
+    }
+
+    // ── Theme accessors ───────────────────────────────────────────────────────
+
+    /** All themes = built-ins + custom themes. Reads from in-memory cache. */
     fun allThemes(): List<AppTheme> {
+        val json = cachedCustomThemesJson ?: "[]"
         val custom = try {
-            val type = object : TypeToken<List<AppTheme>>() {}.type
-            gson.fromJson<List<AppTheme>>(prefs.customThemesJson, type) ?: emptyList()
+            AppJson.decodeFromString<List<AppTheme>>(json)
         } catch (_: Exception) { emptyList() }
         val builtInIds = DefaultThemes.all.map { it.id }.toSet()
         val customMap = custom.associateBy { it.id }
@@ -45,23 +74,30 @@ class ThemeManager(private val context: Context) {
     }
 
     fun activeTheme(): AppTheme {
-        val id = prefs.activeThemeId
+        val id = cachedActiveThemeId ?: "paper"
         return allThemes().firstOrNull { it.id == id } ?: DefaultThemes.all.first()
     }
 
-    fun setActiveTheme(id: String) { prefs.activeThemeId = id }
+    /** Write to prefs AND update the cache (called from ThemeViewModel coroutine scope). */
+    fun setActiveTheme(id: String) {
+        cachedActiveThemeId = id
+    }
 
     fun saveCustomTheme(theme: AppTheme) {
         val list = allCustomThemes().toMutableList()
         val idx = list.indexOfFirst { it.id == theme.id }
         if (idx >= 0) list[idx] = theme else list.add(theme)
-        prefs.customThemesJson = gson.toJson(list)
+        val json = AppJson.encodeToString(list)
+        cachedCustomThemesJson = json
     }
 
     fun deleteCustomTheme(id: String) {
         val list = allCustomThemes().filter { it.id != id }
-        prefs.customThemesJson = gson.toJson(list)
-        if (prefs.activeThemeId == id) prefs.activeThemeId = "paper"
+        val json = AppJson.encodeToString(list)
+        cachedCustomThemesJson = json
+        if (cachedActiveThemeId == id) {
+            cachedActiveThemeId = "paper"
+        }
     }
 
     fun duplicateTheme(id: String): AppTheme? {
@@ -75,12 +111,14 @@ class ThemeManager(private val context: Context) {
         return copy
     }
 
-    private fun allCustomThemes(): List<AppTheme> {
+    fun allCustomThemes(): List<AppTheme> {
+        val json = cachedCustomThemesJson ?: "[]"
         return try {
-            val type = object : TypeToken<List<AppTheme>>() {}.type
-            gson.fromJson<List<AppTheme>>(prefs.customThemesJson, type) ?: emptyList()
+            AppJson.decodeFromString<List<AppTheme>>(json)
         } catch (_: Exception) { emptyList() }
     }
+
+    // ── Activity theming (unchanged) ──────────────────────────────────────────
 
     fun applyThemeToActivity(activity: AppCompatActivity, rootLayout: View? = null, bgImageView: ImageView? = null): AppTheme {
         val theme = activeTheme()
@@ -93,7 +131,6 @@ class ThemeManager(private val context: Context) {
 
         rootLayout?.setBackgroundColor(bgColor)
 
-        // Status & Navigation bar colors
         window.statusBarColor = toolbarColor
         window.navigationBarColor = surfaceColor
 
@@ -102,7 +139,6 @@ class ThemeManager(private val context: Context) {
         controller.isAppearanceLightStatusBars = !isDarkTheme
         controller.isAppearanceLightNavigationBars = !isDarkTheme
 
-        // Custom Background Image handling
         if (bgImageView != null) {
             val imageUriStr = theme.backgroundImageUri
             if (!imageUriStr.isNullOrEmpty()) {
@@ -119,15 +155,11 @@ class ThemeManager(private val context: Context) {
             }
         }
 
-        // Apply theme colors to window
-
-
         return theme
     }
 
     companion object {
 
-        /** Parse a hex color string (#RRGGBB or #AARRGGBB) to an int. */
         fun parseColor(hex: String): Int = try {
             Color.parseColor(hex)
         } catch (_: Exception) { Color.BLACK }
@@ -137,10 +169,6 @@ class ThemeManager(private val context: Context) {
             return darkness >= 0.4
         }
 
-        /**
-         * Resolve a font family key to a Typeface using Android Downloadable Fonts.
-         * Falls back to the system default serif/sans/mono on failure.
-         */
         fun resolveTypeface(context: Context, fontFamilyKey: String): Typeface {
             val fontResId = when (fontFamilyKey) {
                 "serif", "serif-medium", "serif-bold" -> R.font.playfair_display
@@ -164,7 +192,6 @@ class ThemeManager(private val context: Context) {
                     }
                 } catch (_: Exception) {}
             }
-            // Fallback to system typefaces
             return when {
                 fontFamilyKey.startsWith("serif") -> Typeface.SERIF
                 fontFamilyKey.startsWith("mono")  -> Typeface.MONOSPACE
@@ -173,9 +200,9 @@ class ThemeManager(private val context: Context) {
         }
 
         fun lineSpacingMultiplier(key: String): Float = when (key) {
-            "compact"     -> 1.4f
-            "spacious"    -> 2.0f
-            else          -> 1.7f  // comfortable
+            "compact"  -> 1.4f
+            "spacious" -> 2.0f
+            else       -> 1.7f  // comfortable
         }
     }
 }

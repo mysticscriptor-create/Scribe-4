@@ -2,7 +2,9 @@ package com.primaloptima.scribe.ui.screens
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,42 +21,73 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.livedata.observeAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
-import com.google.gson.Gson
-import com.google.gson.GsonBuilder
-import com.primaloptima.scribe.ThemeEditActivity
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.style.TextOverflow
 import com.primaloptima.scribe.ui.theme.FrostedDialog
+import com.primaloptima.scribe.ui.theme.LocalHazeState
+import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
+import com.primaloptima.scribe.ui.theme.frostedBar
+import com.primaloptima.scribe.ui.components.ScribeSingleFab
 import com.primaloptima.scribe.ui.theme.parseComposeColor
 import com.primaloptima.scribe.ui.theme.FontHelper
+import com.primaloptima.scribe.util.BitmapBlur
 import com.primaloptima.scribe.util.DefaultThemes
 import com.primaloptima.scribe.util.model.AppTheme
+import com.primaloptima.scribe.util.AppJson
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 import com.primaloptima.scribe.viewmodel.ThemeViewModel
+import dev.chrisbanes.haze.hazeSource
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ThemeListScreen(
     vm: ThemeViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onEditTheme: (themeId: String) -> Unit
 ) {
     val context = LocalContext.current
-    val themes by vm.themes.observeAsState(emptyList())
-    val activeTheme by vm.activeTheme.observeAsState()
+    val themes by vm.themes.collectAsStateWithLifecycle()
+    val activeTheme by vm.activeTheme.collectAsStateWithLifecycle()
 
     var themeToDelete by remember { mutableStateOf<AppTheme?>(null) }
     var showTopMenu by remember { mutableStateOf(false) }
+
+    val view = LocalView.current
+    val blurRadiusPx = com.primaloptima.scribe.ui.theme.LocalFrostedBlurRadius.current.toInt().coerceIn(1, 25)
+    val hazeState = LocalHazeState.current
+    var dialogOneShotBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var dialogCaptured by remember { mutableStateOf(false) }
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        val anyDialogOpen = themeToDelete != null
+        LaunchedEffect(anyDialogOpen) {
+            if (anyDialogOpen && !dialogCaptured) {
+                dialogCaptured = true
+                val raw = BitmapBlur.captureOnly(view)
+                dialogOneShotBitmap = withContext(Dispatchers.IO) {
+                    raw?.let { BitmapBlur.blurBitmap(it, radius = blurRadiusPx) }
+                }
+            } else if (!anyDialogOpen) {
+                dialogCaptured = false
+                dialogOneShotBitmap = null
+            }
+        }
+    }
 
     val importThemeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -72,8 +105,13 @@ fun ThemeListScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets.systemBars,
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent
+                ),
+                modifier = Modifier.frostedBar(hazeState),
                 title = { Text("Themes", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -104,7 +142,9 @@ fun ThemeListScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
+            ScribeSingleFab(
+                icon = Icons.Default.Add,
+                contentDescription = "New Theme",
                 onClick = {
                     val active = activeTheme ?: DefaultThemes.all.first()
                     val newTheme = active.copy(
@@ -114,14 +154,9 @@ fun ThemeListScreen(
                         emoji = "🖊️"
                     )
                     vm.save(newTheme)
-                    context.startActivity(
-                        Intent(context, ThemeEditActivity::class.java)
-                            .putExtra("theme_id", newTheme.id)
-                    )
+                    onEditTheme(newTheme.id)
                 }
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "New Theme")
-            }
+            )
         }
     ) { padding ->
         LazyColumn(
@@ -130,6 +165,7 @@ fun ThemeListScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .then(if (hazeState != null) Modifier.hazeSource(hazeState) else Modifier)
         ) {
             itemsIndexed(
                 items = sortedThemes,
@@ -143,12 +179,7 @@ fun ThemeListScreen(
                         vm.setActive(theme.id)
                         Toast.makeText(context, "${theme.name} applied", Toast.LENGTH_SHORT).show()
                     },
-                    onEdit = {
-                        context.startActivity(
-                            Intent(context, ThemeEditActivity::class.java)
-                                .putExtra("theme_id", theme.id)
-                        )
-                    },
+                    onEdit = { onEditTheme(theme.id) },
                     onDuplicate = {
                         vm.duplicate(theme.id)
                         Toast.makeText(context, "Duplicated ${theme.name}", Toast.LENGTH_SHORT).show()
@@ -162,23 +193,25 @@ fun ThemeListScreen(
         }
     }
 
-    themeToDelete?.let { theme ->
-        FrostedDialog(
-            onDismissRequest = { themeToDelete = null },
-            title = { Text("Delete \"${theme.name}\"?") },
-            text = { Text("Are you sure you want to delete this theme?") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        vm.delete(theme.id)
-                        themeToDelete = null
-                    }
-                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { themeToDelete = null }) { Text("Cancel") }
-            }
-        )
+    CompositionLocalProvider(LocalOneShotBitmap provides dialogOneShotBitmap) {
+        themeToDelete?.let { theme ->
+            FrostedDialog(
+                onDismissRequest = { themeToDelete = null },
+                title = { Text("Delete \"${theme.name}\"?") },
+                text = { Text("Are you sure you want to delete this theme?") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            vm.delete(theme.id)
+                            themeToDelete = null
+                        }
+                    ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { themeToDelete = null }) { Text("Cancel") }
+                }
+            )
+        }
     }
 }
 
@@ -370,8 +403,7 @@ private fun ThemeCard(
 
 private fun exportThemeJson(context: Context, theme: AppTheme) {
     try {
-        val gson = GsonBuilder().setPrettyPrinting().create()
-        val json = gson.toJson(theme)
+        val json = AppJson.encodeToString(theme)
         val fileName = "${theme.name.lowercase().replace(Regex("[^a-z0-9]"), "_")}_theme.json"
         val dir = File(context.cacheDir, "exported_themes").also { it.mkdirs() }
         val file = File(dir, fileName).also { it.writeText(json) }
@@ -392,7 +424,7 @@ private fun importThemeFromUri(context: Context, uri: Uri, vm: ThemeViewModel) {
         val inputStream = context.contentResolver.openInputStream(uri)
         val json = inputStream?.bufferedReader()?.use { it.readText() }
         if (!json.isNullOrEmpty()) {
-            val imported = Gson().fromJson(json, AppTheme::class.java)
+            val imported = try { AppJson.decodeFromString<AppTheme>(json) } catch (_: Exception) { null }
             if (imported != null && !imported.name.isNullOrBlank()) {
                 val newTheme = imported.copy(
                     id = vm.generateId(),

@@ -1,6 +1,5 @@
 package com.primaloptima.scribe.ui.screens
 
-import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -15,8 +14,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -24,26 +21,37 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.livedata.observeAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.foundation.gestures.detectTapGestures
+
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import com.primaloptima.scribe.ui.theme.LocalAppTheme
+import androidx.compose.ui.res.painterResource
+import com.primaloptima.scribe.ui.theme.LocalAccentColor
+import android.graphics.Bitmap
+import android.os.Build
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.activity.ComponentActivity
 import com.primaloptima.scribe.ui.theme.LocalHazeState
+import com.primaloptima.scribe.ui.theme.localHasBgImage
+import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
+import com.primaloptima.scribe.ui.theme.LocalBarBlurBitmap
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
-import com.primaloptima.scribe.ui.theme.frostedFab
 import com.primaloptima.scribe.ui.theme.frostedPanel
 import com.primaloptima.scribe.ui.theme.FrostedDialog
-import com.primaloptima.scribe.ui.theme.parseComposeColor
+import com.primaloptima.scribe.ui.theme.FrostedBarContent
+import com.primaloptima.scribe.ui.theme.FrostedPanelContent
+
+import androidx.compose.material3.LocalContentColor
+import com.primaloptima.scribe.util.BitmapBlur
+import com.primaloptima.scribe.util.GrainTexture
+import androidx.compose.ui.platform.LocalView
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
 import dev.chrisbanes.haze.hazeSource
 import androidx.compose.ui.text.SpanStyle
@@ -55,79 +63,171 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.allowHardware
+import com.primaloptima.scribe.ui.components.ScribeExtendedFab
+import com.primaloptima.scribe.ui.components.ScribeSpeedDialFab
+import com.primaloptima.scribe.ui.components.SpeedDialItem
+import com.primaloptima.scribe.ui.components.ScribeFabTokens
 import com.primaloptima.scribe.*
+import com.primaloptima.scribe.R
 import com.primaloptima.scribe.data.Book
 import com.primaloptima.scribe.data.Folder
 import com.primaloptima.scribe.data.Note
 import com.primaloptima.scribe.util.CoverUtils
-import com.primaloptima.scribe.util.ThemeDataStoreRepo
-import com.primaloptima.scribe.viewmodel.HomeViewModel
+import com.primaloptima.scribe.viewmodel.BooksViewModel
+import com.primaloptima.scribe.viewmodel.DashboardViewModel
+import com.primaloptima.scribe.viewmodel.HomeShellViewModel
+import com.primaloptima.scribe.viewmodel.NotesViewModel
+import com.primaloptima.scribe.viewmodel.StatsViewModel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
-    vm: HomeViewModel,
+    shellVm: HomeShellViewModel,
+    dashboardVm: DashboardViewModel,
+    booksVm: BooksViewModel,
+    notesVm: NotesViewModel,
+    statsVm: StatsViewModel,
     onOpenBook: (Book) -> Unit,
+    onOpenNote: (noteId: String, bookId: String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSheets: () -> Unit,
+    onOpenSheetsCreate: () -> Unit,
     onOpenThemes: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     var rightPanelVisible by remember { mutableStateOf(false) }
-    val repo = remember { ThemeDataStoreRepo(context) }
+    var fabExpanded by remember { mutableStateOf(false) }
 
-    // 0: Books, 1: Notes, 2: Statistics
-    var selectedNavTab by remember { mutableIntStateOf(0) }
-    var isGridMode by remember { mutableStateOf(true) }
-    var gridColumns by remember { mutableIntStateOf(2) }
+    val view = LocalView.current
+    val blurRadiusPx = com.primaloptima.scribe.ui.theme.LocalFrostedBlurRadius.current.toInt().coerceIn(1, 25)
 
-    LaunchedEffect(Unit) {
-        repo.gridColumnsFlow.collectLatest { gridColumns = it }
+    // Make the system navigation bar follow the app theme.
+    // We set it transparent so the frosted bottom bar shows through, with light
+    // or dark icons matching the current color scheme.
+    val isDarkTheme = MaterialTheme.colorScheme.surface.let { color ->
+        val r = color.red * 0.299f
+        val g = color.green * 0.587f
+        val b = color.blue * 0.114f
+        (r + g + b) < 0.5f
+    }
+    SideEffect {
+        val window = (view.context as? ComponentActivity)?.window ?: return@SideEffect
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        WindowInsetsControllerCompat(window, view).isAppearanceLightNavigationBars = !isDarkTheme
     }
 
-    val pagerState = rememberPagerState(initialPage = 0) { 3 }
-    LaunchedEffect(pagerState.currentPage) {
-        selectedNavTab = pagerState.currentPage
+    // ── Left drawer blur (pre-API-31) ────────────────────────────────────────
+    // We use LocalBarBlurBitmap (derived from the background image by ScribeTheme)
+    // rather than a live screen capture. The live-capture path raced the 300 ms
+    // open animation on low-end devices and lost, producing a visible flash.
+    // LocalBarBlurBitmap is always ready before any UI is shown, so the drawer
+    // glass is correct from frame one — no capture, no async blur, no flash.
+
+    // ── Right panel blur (pre-API-31) ────────────────────────────────────────
+    // Same rationale as the left drawer: use LocalBarBlurBitmap instead of a
+    // live capture that races the slide-in animation.
+
+    val hazeState = LocalHazeState.current
+
+    // 0: Dashboard, 1: Books, 2: Notes, 3: Statistics
+    val homeStartPage by booksVm.homeStartPage.collectAsStateWithLifecycle()
+    val initialPage = remember(homeStartPage) { if (homeStartPage == "dashboard") 0 else 1 }
+    val selectedNavTab by shellVm.selectedTab.collectAsStateWithLifecycle()
+    var isGridMode by remember { mutableStateOf(true) }
+    val gridColumns by booksVm.gridColumns.collectAsStateWithLifecycle()
+
+    // Pre-bake grain texture on first composition so the first drawer open uses
+    // the cached bitmap rather than the inline LCG fallback. Warm-up runs on IO
+    // inside GrainTexture; this call returns immediately.
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && localHasBgImage()) {
+        val screenW = view.rootView.width
+        val screenH = view.rootView.height
+        LaunchedEffect(screenW, screenH) {
+            if (screenW > 0 && screenH > 0) {
+                GrainTexture.warmUp(screenW, screenH)
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        shellVm.selectTab(initialPage)
+    }
+    // Collapse speed-dial whenever the user switches tabs
+    LaunchedEffect(selectedNavTab) {
+        fabExpanded = false
+    }
+    // Collapse speed-dial when the navigation drawer opens
+    LaunchedEffect(drawerState.currentValue) {
+        if (drawerState.currentValue == DrawerValue.Open) fabExpanded = false
     }
 
     // Search state
     var isSearching by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
 
-    val allBooks by vm.books.observeAsState(emptyList())
-    val allNotes by vm.allNotes.observeAsState(emptyList())
-    val allFolders by vm.allFolders.observeAsState(emptyList())
+    val allBooks by booksVm.books.collectAsStateWithLifecycle()
+    // Pre-sorted list from ViewModel StateFlow — sort runs in the coroutine layer,
+    // never inside composition. See BooksViewModel.sortedBooks for details.
+    val sortedBooks by booksVm.sortedBooks.collectAsStateWithLifecycle()
+    val allNotes by notesVm.allNotes.collectAsStateWithLifecycle()
+    val allFolders by notesVm.allFolders.collectAsStateWithLifecycle()
 
-    // Book stats computations
-    val bookWordCounts = remember(allNotes, allBooks) {
-        allBooks.associate { book ->
-            book.id to allNotes.filter { it.bookId == book.id }.sumOf { n ->
-                n.content.split("\\s+".toRegex()).count { it.isNotBlank() }
-            }
-        }
-    }
-    val bookFileCounts = remember(allNotes, allBooks) {
-        allBooks.associate { book ->
-            book.id to allNotes.count { it.bookId == book.id }
-        }
-    }
-    val bookFolderCounts = remember(allFolders, allBooks) {
-        allBooks.associate { book ->
-            book.id to allFolders.count { it.bookId == book.id && it.path != "/" }
-        }
-    }
+    // Book stats — all driven by DB-backed VM StateFlows; no in-memory loops.
+    val bookWordCounts by booksVm.bookWordCounts.collectAsStateWithLifecycle()
+    // Phase 2-A: DB aggregate from VM — no Kotlin loop over allNotes on every recomposition
+    val bookFileCounts by booksVm.bookNoteCounts.collectAsStateWithLifecycle()
+    // DB aggregate — replaces in-memory allFolders.count { } loop
+    val bookFolderCounts by booksVm.bookFolderCounts.collectAsStateWithLifecycle()
 
     // Dialog states
     var showCreateDialog by remember { mutableStateOf(false) }
     var bookToRename by remember { mutableStateOf<Book?>(null) }
     var bookToDelete by remember { mutableStateOf<Book?>(null) }
     var bookToChangeCover by remember { mutableStateOf<Book?>(null) }
+
+    // One-shot capture for dialogs on pre-API-31 devices.
+    //
+    // KEY FIX: FrostedDialog is an inline Box composable (not a system Dialog/Popup
+    // window), so it renders in the SAME recomposition frame that sets showXxx = true.
+    // LaunchedEffect fires AFTER layout+draw, meaning captureOnly was capturing the
+    // screen *after* the white dialog was already painted — blurring a white rectangle.
+    //
+    // Solution: capture BEFORE setting the show-flag. captureForDialog() runs the
+    // capture on the current coroutine (Main dispatcher via LaunchedEffect/scope.launch
+    // which both default to Main), stores the bitmap, then sets the flag so the dialog
+    // composable first renders with a valid blur behind it.
+    var dialogOneShotBitmap by remember { mutableStateOf<Bitmap?>(null) }
+
+    // Clears the bitmap when all dialogs close so the next open gets a fresh capture.
+    val anyDialogOpen = showCreateDialog || bookToRename != null ||
+            bookToDelete != null || bookToChangeCover != null
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        LaunchedEffect(anyDialogOpen) {
+            if (!anyDialogOpen) dialogOneShotBitmap = null
+        }
+    }
+
+    // Helper: capture → blur → store, then execute the lambda that opens the dialog.
+    // All of this happens before the dialog composable ever enters the tree.
+    val captureForDialog: suspend (() -> Unit) -> Unit = { openDialog ->
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            // captureOnly uses view.rootView.draw() which requires the Main thread.
+            // scope.launch / LaunchedEffect both run on Main by default, so this is safe.
+            val raw = BitmapBlur.captureOnly(view)
+            dialogOneShotBitmap = withContext(Dispatchers.IO) {
+                raw?.let { BitmapBlur.blurBitmap(it, radius = blurRadiusPx) }
+            }
+        }
+        openDialog()   // NOW set the flag — dialog renders with bitmap already in place
+    }
 
     val coverPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -136,7 +236,7 @@ fun HomeScreen(
         uri ?: return@rememberLauncherForActivityResult
         scope.launch(Dispatchers.IO) {
             val savedUri = CoverUtils.saveCoverImage(context.applicationContext, book.id, uri)
-            vm.updateCover(book.id, savedUri)
+            booksVm.updateCover(book.id, savedUri)
         }
         bookToChangeCover = null
     }
@@ -152,12 +252,16 @@ fun HomeScreen(
             onHorizontalDrag = { change, dragAmount ->
                 totalX += dragAmount
                 val threshold = 36.dp.toPx()
-                // Left-edge swipe → open navigation drawer
+                // Left-edge swipe → open navigation drawer.
+                // Capture BEFORE drawerState.open() so the bitmap contains clean
+                // screen content — no drawer pixels, no recomposition yet.
+                // rawDrawerBitmap assignment triggers the IO blur LaunchedEffect
+                // which runs in parallel with the opening animation.
                 if (drawerState.isClosed && startX < size.width * 0.3f && totalX > threshold) {
                     change.consume()
                     scope.launch { drawerState.open() }
                 }
-                // Right-edge swipe → open stats panel
+                // Right-edge swipe → open stats panel.
                 if (!rightPanelVisible && startX > size.width * 0.72f && totalX < -threshold) {
                     change.consume()
                     rightPanelVisible = true
@@ -166,12 +270,12 @@ fun HomeScreen(
         )
     }
 
-    val hazeState = LocalHazeState.current
-
+    CompositionLocalProvider(LocalOneShotBitmap provides dialogOneShotBitmap) {
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = true,
         drawerContent = {
+            CompositionLocalProvider(LocalOneShotBitmap provides LocalBarBlurBitmap.current) {
             ModalDrawerSheet(
                 drawerContainerColor = Color.Transparent,
                 modifier = Modifier
@@ -179,102 +283,240 @@ fun HomeScreen(
                     .fillMaxWidth(0.78f)
                     .frostedPanel(hazeState)
             ) {
-                Spacer(modifier = Modifier.height(24.dp))
+                FrostedPanelContent {
+                val accentColor = LocalAccentColor.current
+                val (adaptiveTextColor, adaptiveTextModifier) = rememberAdaptiveTextColor(
+                    fallback = MaterialTheme.colorScheme.onSurface
+                )
+                val currentStreak by dashboardVm.currentStreak.collectAsStateWithLifecycle()
+
+                // ── HEADER: icon + wordmark + avatar + streak ──
+                Spacer(modifier = Modifier.height(28.dp))
+                // Row with fillMaxWidth reliably pins logo to start and avatar+streak
+                // to end inside ModalDrawerSheet, regardless of its internal Column alignment.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(horizontal = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Icon(
-                        Icons.Outlined.EditNote,
-                        contentDescription = null,
-                        modifier = Modifier.size(32.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = "Scribe",
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    // Wordmark — two Icons share the same viewport so they overlap perfectly,
+                    // letting ic_scribe_s (the coloured S+quill) sit on top of ic_scribe_text.
+                    Box(
+                        modifier = Modifier
+                            .height(36.dp)
+                            .wrapContentWidth()
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_scribe_text),
+                            contentDescription = null,
+                            tint = adaptiveTextColor,
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .aspectRatio(2048f / 922f)
+                                .then(adaptiveTextModifier) // required: without this, bounds stays Rect.Zero and the fallback live-analysis path always returns white
+                        )
+                        Icon(
+                            painter = painterResource(R.drawable.ic_scribe_s),
+                            contentDescription = "Scribe",
+                            tint = accentColor,
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .aspectRatio(2048f / 922f)
+                        )
+                    }
+                    // Avatar + streak pinned to end
+                    Column(
+                        horizontalAlignment = Alignment.End
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(accentColor.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(22.dp),
+                                tint = accentColor
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(accentColor.copy(alpha = 0.20f))
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = "🔥 $currentStreak ${if (currentStreak == 1) "Day" else "Days"}",
+                                fontSize = 11.sp,
+                                color = accentColor,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
                 }
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                NavigationDrawerItem(
-                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                    label = { Text("Settings") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawerState.close() }
-                        onOpenSettings()
-                    },
-                    modifier = Modifier.padding(horizontal = 12.dp)
-                )
-                NavigationDrawerItem(
-                    icon = { Icon(Icons.Default.Book, contentDescription = null) },
-                    label = { Text("World Sheets") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawerState.close() }
-                        onOpenSheets()
-                    },
-                    modifier = Modifier.padding(horizontal = 12.dp)
-                )
-                NavigationDrawerItem(
-                    icon = { Icon(Icons.Default.Palette, contentDescription = null) },
-                    label = { Text("Themes") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawerState.close() }
-                        onOpenThemes()
-                    },
-                    modifier = Modifier.padding(horizontal = 12.dp)
-                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // ── INNER CARD with nav items ──
+                val innerCardBg = if (hazeState != null) {
+                    // Frosted glass active: semi-transparent overlay
+                    Color.White.copy(alpha = 0.07f)
+                } else {
+                    // No frosted glass: slightly lifted surface
+                    MaterialTheme.colorScheme.surface.copy(alpha = 0.12f)
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(innerCardBg)
+                ) {
+                    Column(modifier = Modifier.padding(vertical = 12.dp)) {
+
+                        // Section label: NAVIGATION
+                        Text(
+                            text = "NAVIGATION",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 1.5.sp,
+                            color = LocalContentColor.current.copy(alpha = 0.45f),
+                            modifier = Modifier.padding(start = 16.dp, bottom = 4.dp)
+                        )
+
+                        // World Sheets item
+                        DrawerNavItem(
+                            icon = Icons.Default.Map,
+                            label = "World Sheets",
+                            accentColor = accentColor,
+                            onClick = {
+                                scope.launch { drawerState.close() }
+                                onOpenSheets()
+                            }
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Section label: TOOLS
+                        Text(
+                            text = "TOOLS",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 1.5.sp,
+                            color = LocalContentColor.current.copy(alpha = 0.45f),
+                            modifier = Modifier.padding(start = 16.dp, bottom = 4.dp)
+                        )
+
+                        // Themes item
+                        DrawerNavItem(
+                            icon = Icons.Default.Palette,
+                            label = "Themes",
+                            accentColor = accentColor,
+                            onClick = {
+                                scope.launch { drawerState.close() }
+                                onOpenThemes()
+                            }
+                        )
+
+                        // Settings item
+                        DrawerNavItem(
+                            icon = Icons.Default.Settings,
+                            label = "Settings",
+                            accentColor = accentColor,
+                            onClick = {
+                                scope.launch { drawerState.close() }
+                                onOpenSettings()
+                            }
+                        )
+                    }
+                }
             }
+                } // end FrostedPanelContent
+            } // end CompositionLocalProvider(LocalOneShotBitmap provides oneShotBitmap)
         }
     ) {
         Scaffold(
             containerColor = Color.Transparent,
             modifier = Modifier.then(swipeGestureModifier),
             topBar = {
+                // On API < 31 frostedBar needs LocalOneShotBitmap to be non-null.
+                // LocalBarBlurBitmap is provided by ScribeTheme from the Coil bitmap —
+                // no screen capture needed; already available when the image is loaded.
+                CompositionLocalProvider(LocalOneShotBitmap provides LocalBarBlurBitmap.current) {
+                FrostedBarContent {
+
+                // ── Full-screen search overlay ──────────────────────────────
+                // When search is active, a full overlay slides down from the top
+                // so the user has a proper wide search field instead of a cramped
+                // one inside the narrow top bar.
+                AnimatedVisibility(
+                    visible = isSearching,
+                    enter = slideInVertically(initialOffsetY = { -it }, animationSpec = tween(220)) + fadeIn(tween(220)),
+                    exit = slideOutVertically(targetOffsetY = { -it }, animationSpec = tween(180)) + fadeOut(tween(180))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(top = 8.dp)
+                            .padding(horizontal = 12.dp)
+                            .padding(bottom = 8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search titles, notes, folders...") },
+                            singleLine = true,
+                            leadingIcon = {
+                                Icon(Icons.Default.Search, contentDescription = null)
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = {
+                                    if (searchQuery.isNotEmpty()) searchQuery = ""
+                                    else isSearching = false
+                                }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear")
+                                }
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(54.dp)
+                        )
+                    }
+                }
+
                 TopAppBar(
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = Color.Transparent
                     ),
-                    modifier = Modifier.frostedBar(hazeState),
+                    windowInsets = WindowInsets(0.dp),
+                    modifier = Modifier
+                        .frostedBar(hazeState)
+                        .statusBarsPadding()
+                        .height(52.dp),
                     title = {
-                        if (isSearching) {
-                            OutlinedTextField(
-                                value = searchQuery,
-                                onValueChange = { searchQuery = it },
-                                placeholder = { Text("Search full text, titles...") },
-                                singleLine = true,
-                                trailingIcon = {
-                                    IconButton(onClick = {
-                                        if (searchQuery.isNotEmpty()) searchQuery = ""
-                                        else isSearching = false
-                                    }) {
-                                        Icon(Icons.Default.Clear, contentDescription = "Clear")
-                                    }
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(52.dp)
-                            )
-                        } else {
-                            val (titleColor, titleModifier) = rememberAdaptiveTextColor(
-                                fallback = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                "Scribe",
-                                fontWeight = FontWeight.Bold,
-                                color = titleColor,
-                                modifier = titleModifier
-                            )
-                        }
+                        val (titleColor, titleModifier) = rememberAdaptiveTextColor(
+                            fallback = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "Scribe",
+                            fontWeight = FontWeight.Bold,
+                            color = titleColor,
+                            modifier = titleModifier
+                        )
                     },
                     navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        IconButton(onClick = {
+                            scope.launch { drawerState.open() }
+                        }) {
                             val (iconColor, iconModifier) = rememberAdaptiveTextColor(
                                 fallback = MaterialTheme.colorScheme.primary
                             )
@@ -287,69 +529,56 @@ fun HomeScreen(
                         }
                     },
                     actions = {
-                        if (!isSearching) {
-                            IconButton(onClick = { rightPanelVisible = !rightPanelVisible }) {
-                                Icon(Icons.Default.Info, contentDescription = "Overview")
-                            }
-                            IconButton(onClick = { isSearching = true }) {
-                                Icon(Icons.Default.Search, contentDescription = "Search")
-                            }
+                        IconButton(onClick = { isSearching = true }) {
+                            Icon(Icons.Default.Search, contentDescription = "Search")
                         }
-                        if (selectedNavTab == 0 && !isSearching) {
-                            if (isGridMode) {
-                                IconButton(onClick = {
-                                    val nextCols = if (gridColumns == 2) 3 else 2
-                                    gridColumns = nextCols
-                                    scope.launch { repo.setGridColumns(nextCols) }
-                                }) {
-                                    Surface(
-                                        shape = RoundedCornerShape(4.dp),
-                                        color = MaterialTheme.colorScheme.primaryContainer,
-                                        modifier = Modifier.padding(2.dp)
-                                    ) {
-                                        Text(
-                                            text = "${gridColumns}C",
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 12.sp,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                }
-                            }
+                        if (selectedNavTab == 1) {
                             IconButton(onClick = { isGridMode = !isGridMode }) {
                                 Icon(
-                                    if (isGridMode) Icons.Default.ViewList else Icons.Default.GridView,
+                                    if (isGridMode) Icons.Filled.ViewList else Icons.Default.GridView,
                                     contentDescription = "Toggle Grid/List View"
                                 )
                             }
                             var showSortMenu by remember { mutableStateOf(false) }
                             IconButton(onClick = { showSortMenu = true }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "Sort Options")
+                                Icon(Icons.Default.MoreVert, contentDescription = "More Options")
                             }
                             DropdownMenu(
                                 expanded = showSortMenu,
                                 onDismissRequest = { showSortMenu = false },
                                 containerColor = LocalSolidSurface.current
                             ) {
+                                // Grid column toggle (only shown in grid mode)
+                                if (isGridMode) {
+                                    DropdownMenuItem(
+                                        text = { Text(if (gridColumns == 2) "3 Columns" else "2 Columns") },
+                                        leadingIcon = { Icon(Icons.Default.GridView, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                        onClick = {
+                                            val nextCols = if (gridColumns == 2) 3 else 2
+                                            booksVm.setGridColumns(nextCols)
+                                            showSortMenu = false
+                                        }
+                                    )
+                                    HorizontalDivider()
+                                }
                                 DropdownMenuItem(
                                     text = { Text("Date Updated") },
                                     onClick = {
-                                        vm.setSortMode(HomeViewModel.SortMode.DATE_UPDATED)
+                                        booksVm.setSortMode(BooksViewModel.SortMode.DATE_UPDATED)
                                         showSortMenu = false
                                     }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Date Created") },
                                     onClick = {
-                                        vm.setSortMode(HomeViewModel.SortMode.DATE_CREATED)
+                                        booksVm.setSortMode(BooksViewModel.SortMode.DATE_CREATED)
                                         showSortMenu = false
                                     }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Title (A-Z)") },
                                     onClick = {
-                                        vm.setSortMode(HomeViewModel.SortMode.TITLE_AZ)
+                                        booksVm.setSortMode(BooksViewModel.SortMode.TITLE_AZ)
                                         showSortMenu = false
                                     }
                                 )
@@ -357,18 +586,22 @@ fun HomeScreen(
                         }
                     }
                 )
+                } // end FrostedBarContent for topBar
+                } // end CompositionLocalProvider(LocalBarBlurBitmap for topBar)
             },
             bottomBar = {
+                CompositionLocalProvider(LocalOneShotBitmap provides LocalBarBlurBitmap.current) {
+                FrostedBarContent {
                 NavigationBar(
                     containerColor = Color.Transparent,
                     tonalElevation = 0.dp,
+                    windowInsets = WindowInsets(0.dp),
                     modifier = Modifier
-                        .height(60.dp)
                         .frostedBar(hazeState)
+                        .navigationBarsPadding()
+                        .height(58.dp)
                 ) {
-                    val activeTheme = LocalAppTheme.current
-                    val accentColor = activeTheme?.let { parseComposeColor(it.colors.accent, MaterialTheme.colorScheme.primary) }
-                        ?: MaterialTheme.colorScheme.primary
+                    val accentColor = LocalAccentColor.current
                     val navColors = NavigationBarItemDefaults.colors(
                         indicatorColor = accentColor,
                         selectedIconColor = MaterialTheme.colorScheme.onPrimary,
@@ -377,80 +610,91 @@ fun HomeScreen(
                     NavigationBarItem(
                         selected = selectedNavTab == 0 && !isSearching,
                         onClick = {
-                            selectedNavTab = 0
+                            shellVm.selectTab(0)
                             isSearching = false
-                            scope.launch { pagerState.animateScrollToPage(0) }
                         },
-                        icon = { Icon(Icons.Default.Book, contentDescription = "Books") },
-                        label = { Text("Books", fontSize = 10.sp) },
+                        icon = { Icon(Icons.Default.Dashboard, contentDescription = "Dashboard", modifier = Modifier.size(20.dp)) },
+                        label = { Text("Dashboard", fontSize = 9.sp) },
                         colors = navColors
                     )
                     NavigationBarItem(
                         selected = selectedNavTab == 1 && !isSearching,
                         onClick = {
-                            selectedNavTab = 1
+                            shellVm.selectTab(1)
                             isSearching = false
-                            scope.launch { pagerState.animateScrollToPage(1) }
                         },
-                        icon = { Icon(Icons.Default.StickyNote2, contentDescription = "Notes") },
-                        label = { Text("Notes", fontSize = 10.sp) },
+                        icon = { Icon(Icons.Default.Book, contentDescription = "Books", modifier = Modifier.size(20.dp)) },
+                        label = { Text("Books", fontSize = 9.sp) },
                         colors = navColors
                     )
                     NavigationBarItem(
                         selected = selectedNavTab == 2 && !isSearching,
                         onClick = {
-                            selectedNavTab = 2
+                            shellVm.selectTab(2)
                             isSearching = false
-                            scope.launch { pagerState.animateScrollToPage(2) }
                         },
-                        icon = { Icon(Icons.Default.BarChart, contentDescription = "Statistics") },
-                        label = { Text("Statistics", fontSize = 10.sp) },
+                        icon = { Icon(Icons.Filled.StickyNote2, contentDescription = "Notes", modifier = Modifier.size(20.dp)) },
+                        label = { Text("Notes", fontSize = 9.sp) },
+                        colors = navColors
+                    )
+                    NavigationBarItem(
+                        selected = selectedNavTab == 3 && !isSearching,
+                        onClick = {
+                            shellVm.selectTab(3)
+                            isSearching = false
+                        },
+                        icon = { Icon(Icons.Default.BarChart, contentDescription = "Statistics", modifier = Modifier.size(20.dp)) },
+                        label = { Text("Stats", fontSize = 9.sp) },
                         colors = navColors
                     )
                 }
+                } // end FrostedBarContent for bottomBar
+                } // end CompositionLocalProvider(LocalBarBlurBitmap for bottomBar)
             },
             floatingActionButton = {
-                val fabTheme = LocalAppTheme.current
-                val accentClr = fabTheme?.let {
-                    parseComposeColor(it.colors.accent, MaterialTheme.colorScheme.primary)
-                } ?: MaterialTheme.colorScheme.primary
-
+                // FAB is always visible — LocalBarBlurBitmap (derived from the Coil
+                // image in ScribeTheme) is already loaded, no screen capture needed.
+                CompositionLocalProvider(LocalOneShotBitmap provides LocalBarBlurBitmap.current) {
                 AnimatedContent(
                     targetState = selectedNavTab,
                     transitionSpec = {
-                        (scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) +
-                                fadeIn()) togetherWith (scaleOut() + fadeOut())
+                        ScribeFabTokens.TabSwitchEnter togetherWith ScribeFabTokens.TabSwitchExit
                     },
                     label = "fabSwitch"
                 ) { tab ->
                     when (tab) {
-                        0 -> FloatingActionButton(
-                            onClick = { showCreateDialog = true },
-                            containerColor = accentClr,
-                            contentColor = Color.White,
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = "New Book")
-                        }
-                        1 -> ExtendedFloatingActionButton(
+                        0 -> Box(Modifier) // Dashboard — no FAB; actions live inside the screen
+                        1 -> ScribeSpeedDialFab(
+                            items = listOf(
+                                SpeedDialItem(
+                                    icon  = Icons.Default.Add,
+                                    label = "New Book",
+                                    onClick = {
+                                        scope.launch { captureForDialog { showCreateDialog = true } }
+                                    }
+                                ),
+                                SpeedDialItem(
+                                    icon  = Icons.Outlined.Book,
+                                    label = "New Sheet",
+                                    onClick = { onOpenSheetsCreate() }
+                                ),
+                            ),
+                            expanded         = fabExpanded,
+                            onExpandedChange = { fabExpanded = it },
+                        )
+                        2 -> ScribeExtendedFab(
+                            icon  = Icons.Default.Edit,
+                            label = "Quick Note",
                             onClick = {
-                                vm.createQuickNote { note ->
-                                    context.startActivity(
-                                        Intent(context, MainActivity::class.java)
-                                            .putExtra(MainActivity.EXTRA_NOTE_ID, note.id)
-                                            .putExtra(MainActivity.EXTRA_BOOK_ID, note.bookId)
-                                    )
+                                booksVm.createQuickNote { note ->
+                                    onOpenNote(note.id, note.bookId)
                                 }
-                            },
-                            icon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                            text = { Text("Quick Note") },
-                            containerColor = accentClr,
-                            contentColor = Color.White,
-                            shape = RoundedCornerShape(16.dp)
+                            }
                         )
                         else -> Box(Modifier)
                     }
                 }
+                } // end CompositionLocalProvider(LocalBarBlurBitmap for FAB)
             }
         ) { padding ->
             Box(
@@ -464,23 +708,41 @@ fun HomeScreen(
                         allBooks = allBooks,
                         allNotes = allNotes,
                         onOpenNote = { note ->
-                            context.startActivity(
-                                Intent(context, MainActivity::class.java)
-                                    .putExtra(MainActivity.EXTRA_NOTE_ID, note.id)
-                                    .putExtra(MainActivity.EXTRA_BOOK_ID, note.bookId)
-                            )
+                            onOpenNote(note.id, note.bookId)
                         }
                     )
                 } else {
-                    HorizontalPager(
-                        state = pagerState,
+                    AnimatedContent(
+                        targetState = selectedNavTab,
+                        transitionSpec = {
+                            if (targetState > initialState) {
+                                slideInHorizontally { it } togetherWith slideOutHorizontally { -it }
+                            } else {
+                                slideInHorizontally { -it } togetherWith slideOutHorizontally { it }
+                            }
+                        },
+                        label = "tab-content",
                         modifier = Modifier
                             .fillMaxSize()
                             .then(if (hazeState != null) Modifier.hazeSource(hazeState) else Modifier)
                     ) { page ->
                         when (page) {
-                            0 -> BooksTabContent(
-                                books = vm.sortedBooks(allBooks),
+                            0 -> DashboardTabContent(
+                                vm = dashboardVm,
+                                allBooks = allBooks,
+                                bookWordCounts = bookWordCounts,
+                                onOpenNote = onOpenNote,
+                                onOpenBook = onOpenBook,
+                                onGoToStats = {
+                                    shellVm.selectTab(3)
+                                },
+                                onGoToBooks = {
+                                    shellVm.selectTab(1)
+                                },
+                                onOpenSheets = onOpenSheets
+                            )
+                            1 -> BooksTabContent(
+                                books = sortedBooks,
                                 isGridMode = isGridMode,
                                 gridColumns = gridColumns,
                                 wordCounts = bookWordCounts,
@@ -488,37 +750,50 @@ fun HomeScreen(
                                 folderCounts = bookFolderCounts,
                                 allNotes = allNotes,
                                 onOpen = onOpenBook,
-                                onRename = { bookToRename = it },
+                                onRename = { book -> scope.launch { captureForDialog { bookToRename = book } } },
                                 onChangeCover = {
                                     bookToChangeCover = it
                                     coverPickerLauncher.launch("image/*")
                                 },
-                                onDelete = { bookToDelete = it }
+                                onDelete = { book -> scope.launch { captureForDialog { bookToDelete = book } } }
                             )
-                            1 -> NotesTabContent(
+                            2 -> NotesTabContent(
                                 allNotes = allNotes,
                                 onOpenNote = { note ->
-                                    context.startActivity(
-                                        Intent(context, MainActivity::class.java)
-                                            .putExtra(MainActivity.EXTRA_NOTE_ID, note.id)
-                                            .putExtra(MainActivity.EXTRA_BOOK_ID, note.bookId)
-                                    )
+                                    onOpenNote(note.id, note.bookId)
                                 }
                             )
-                            2 -> MainStatisticsTabContent(
+                            3 -> MainStatisticsTabContent(
+                                dashboardVm = dashboardVm,
+                                statsVm = statsVm,
                                 allBooks = allBooks,
                                 allNotes = allNotes,
-                                allFolders = allFolders
+                                allFolders = allFolders,
+                                bookWordCounts = bookWordCounts
                             )
                         }
                     }
                 }
 
-                // ── Right stats panel — swipe from right edge or tap Info button ──
+                // ── FAB speed-dial scrim — fades in behind the card, above pager ──
+                AnimatedVisibility(
+                    visible = fabExpanded && selectedNavTab == 1,
+                    enter = fadeIn(tween(200)),
+                    exit = fadeOut(tween(200))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.38f))
+                            .clickable { fabExpanded = false }
+                    )
+                }
+
+                // ── Right stats panel scrim ──
                 AnimatedVisibility(
                     visible = rightPanelVisible,
-                    enter = fadeIn(tween(180)),
-                    exit = fadeOut(tween(180))
+                    enter = fadeIn(tween(200)),
+                    exit = fadeOut(tween(200))
                 ) {
                     Box(
                         modifier = Modifier
@@ -527,73 +802,75 @@ fun HomeScreen(
                             .clickable { rightPanelVisible = false }
                     )
                 }
+
+                // ── Right stats panel ──
+                // DB aggregate — replaces allNotes.sumOf { it.wordCount } in-memory loop
+                val totalWords by booksVm.vaultWordCount.collectAsStateWithLifecycle()
                 AnimatedVisibility(
                     visible = rightPanelVisible,
                     modifier = Modifier.align(Alignment.CenterEnd),
-                    enter = slideInHorizontally(
-                        initialOffsetX = { it },
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioLowBouncy,
-                            stiffness = Spring.StiffnessMedium
-                        )
-                    ),
-                    exit = slideOutHorizontally(
-                        targetOffsetX = { it },
-                        animationSpec = tween(200)
-                    )
+                    enter = slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(200)),
+                    exit = slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(200))
                 ) {
-                    val totalWords = remember(allNotes) {
-                        allNotes.sumOf { n -> n.content.split("\\s+".toRegex()).count { it.isNotBlank() } }
-                    }
-                    Column(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .fillMaxWidth(0.72f)
-                            .frostedPanel(hazeState)
-                            .padding(horizontal = 20.dp, vertical = 24.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                CompositionLocalProvider(LocalOneShotBitmap provides LocalBarBlurBitmap.current) {
+                FrostedPanelContent {
+                Column(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(0.72f)
+                        .frostedPanel(hazeState)
+                        .padding(horizontal = 20.dp, vertical = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Overview", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                            IconButton(onClick = { rightPanelVisible = false }) {
-                                Icon(Icons.Default.Close, contentDescription = "Close")
-                            }
+                        Text("Overview", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        IconButton(onClick = { rightPanelVisible = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close")
                         }
-                        HorizontalDivider()
-                        StatPanelRow(Icons.Default.Book, "Books", "${allBooks.size}")
-                        StatPanelRow(Icons.Default.StickyNote2, "Notes", "${allNotes.size}")
-                        StatPanelRow(Icons.Default.TextFields, "Total words", "$totalWords")
-                        StatPanelRow(Icons.Default.FolderOpen, "Folders", "${allFolders.size}")
-                        Spacer(modifier = Modifier.weight(1f))
-                        HorizontalDivider()
-                        Text(
-                            "Quick Actions",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                        TextButton(
-                            onClick = { rightPanelVisible = false; onOpenSettings() },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Settings")
-                        }
-                        TextButton(
-                            onClick = { rightPanelVisible = false; onOpenThemes() },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.Palette, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Themes")
-                        }
+                    }
+                    HorizontalDivider()
+                    StatPanelRow(Icons.Default.Book, "Books", "${allBooks.size}")
+                    StatPanelRow(Icons.Filled.StickyNote2, "Notes", "${allNotes.size}")
+                    StatPanelRow(Icons.Default.TextFields, "Total words", "$totalWords")
+                    StatPanelRow(Icons.Default.FolderOpen, "Folders", "${allFolders.size}")
+                    Spacer(modifier = Modifier.weight(1f))
+                    HorizontalDivider()
+                    Text(
+                        "Quick Actions",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                    TextButton(
+                        onClick = {
+                            rightPanelVisible = false
+                            onOpenSettings()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Settings")
+                    }
+                    TextButton(
+                        onClick = {
+                            rightPanelVisible = false
+                            onOpenThemes()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Palette, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Themes")
                     }
                 }
+                } // end FrostedPanelContent for right panel
+                } // end CompositionLocalProvider(rightOneShotBitmap for right panel)
+                } // end AnimatedVisibility for right panel
             }
         }
     }
@@ -618,7 +895,7 @@ fun HomeScreen(
                     onClick = {
                         val title = newTitle.trim()
                         if (title.isNotEmpty()) {
-                            vm.createBook(title) { showCreateDialog = false }
+                            booksVm.createBook(title) { showCreateDialog = false }
                         }
                     }
                 ) { Text("Create") }
@@ -647,7 +924,7 @@ fun HomeScreen(
                     onClick = {
                         val t = renameText.trim()
                         if (t.isNotEmpty()) {
-                            vm.renameBook(book.id, t)
+                            booksVm.renameBook(book.id, t)
                         }
                         bookToRename = null
                     }
@@ -667,7 +944,7 @@ fun HomeScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        vm.deleteBook(book.id)
+                        booksVm.deleteBook(book.id)
                         bookToDelete = null
                     }
                 ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
@@ -675,6 +952,35 @@ fun HomeScreen(
             dismissButton = {
                 TextButton(onClick = { bookToDelete = null }) { Text("Cancel") }
             }
+        )
+    }
+    } // end CompositionLocalProvider(LocalOneShotBitmap provides dialogOneShotBitmap)
+}
+
+@Composable
+private fun DrawerNavItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    accentColor: Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = accentColor
+        )
+        Spacer(modifier = Modifier.width(14.dp))
+        Text(
+            text = label,
+            fontSize = 15.sp
         )
     }
 }
@@ -716,7 +1022,7 @@ private fun BooksTabContent(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(books, key = { it.id }) { book ->
+                items(books, key = { it.id }, contentType = { "book_card" }) { book ->
                     BookGridCard(
                         book = book,
                         words = wordCounts[book.id] ?: 0,
@@ -734,7 +1040,7 @@ private fun BooksTabContent(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(books, key = { it.id }) { book ->
+                items(books, key = { it.id }, contentType = { "book_row" }) { book ->
                     val firstNote = allNotes.firstOrNull { it.bookId == book.id && it.content.isNotBlank() }
                     val introSnippet = firstNote?.content?.take(100)?.replace("\n", " ") ?: "No book intro"
                     BookListRow(
@@ -766,67 +1072,34 @@ private fun BookGridCard(
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
-    // ── Idle floating bob ────────────────────────────────────────────────
-    val infiniteTransition = rememberInfiniteTransition(label = "float")
-    val floatY by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = -5f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "floatY"
-    )
-
-    // ── Press 3-D tilt ───────────────────────────────────────────────────
-    var isPressed by remember { mutableStateOf(false) }
-    var pressOffset by remember { mutableStateOf(Offset.Zero) }
-
-    val targetRotX = if (isPressed) (pressOffset.y - 100f) * 0.04f else 0f
-    val targetRotY = if (isPressed) -(pressOffset.x - 80f) * 0.04f else 0f
-    val targetScale = if (isPressed) 0.95f else 1f
-    val targetElev  = if (isPressed) 2f else 12f
-
-    val rotX  by animateFloatAsState(targetRotX,  spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "rotX")
-    val rotY  by animateFloatAsState(targetRotY,  spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "rotY")
-    val scale by animateFloatAsState(targetScale, spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "scale")
-    val elev  by animateFloatAsState(targetElev,  tween(200), label = "elev")
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .graphicsLayer {
-                translationY    = floatY
-                scaleX          = scale
-                scaleY          = scale
-                rotationX       = rotX
-                rotationY       = rotY
-                cameraDistance  = 10f * density
-                shadowElevation = elev.dp.toPx()
-            }
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = { offset ->
-                        isPressed = true
-                        pressOffset = offset
-                        tryAwaitRelease()
-                        isPressed = false
-                    },
-                    onTap = { onOpen() }
-                )
-            },
+            .clickable { onOpen() },
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.72f)
-                .shadow(elev.dp, RoundedCornerShape(8.dp))
                 .clip(RoundedCornerShape(8.dp))
         ) {
             if (book.coverUri != null) {
+                val context = LocalContext.current
                 AsyncImage(
-                    model = book.coverUri,
+                    // On API < 31, one-shot blur uses View.draw(softwareCanvas).
+                    // Hardware bitmaps (Coil's default) crash that call silently,
+                    // causing captureOnly to return null and frosted glass to fall back.
+                    // Use allowHardware(false) on pre-API-31 so the cover stays as a
+                    // software bitmap that the canvas capture can read correctly.
+                    model = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                        ImageRequest.Builder(context)
+                            .data(book.coverUri)
+                            .allowHardware(false)
+                            .build()
+                    } else {
+                        book.coverUri
+                    },
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
@@ -877,7 +1150,7 @@ private fun BookGridCard(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onBackground,
+            color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
         )
 
@@ -923,8 +1196,16 @@ private fun BookListRow(
                         .clip(RoundedCornerShape(4.dp))
                 ) {
                     if (book.coverUri != null) {
+                        val context = LocalContext.current
                         AsyncImage(
-                            model = book.coverUri,
+                            model = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                                ImageRequest.Builder(context)
+                                    .data(book.coverUri)
+                                    .allowHardware(false)
+                                    .build()
+                            } else {
+                                book.coverUri
+                            },
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
@@ -956,7 +1237,7 @@ private fun BookListRow(
                     ) {
                         Text("Tt $words", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Icon(Icons.Default.Article, contentDescription = null, modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Icon(Icons.Filled.Article, contentDescription = null, modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text("$files", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -1012,8 +1293,8 @@ private fun NotesTabContent(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(allNotes, key = { "notes_tab_${it.id}" }) { note ->
-                    val wordCount = note.content.split("\\s+".toRegex()).count { it.isNotBlank() }
+                items(allNotes, key = { "notes_tab_${it.id}" }, contentType = { "note_row" }) { note ->
+                    val wordCount = note.wordCount
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1149,9 +1430,9 @@ private fun StatPanelRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
             Text(label, fontSize = 15.sp)
         }
-        Text(value, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Text(value, fontSize = 15.sp, fontWeight = FontWeight.Bold)
     }
 }

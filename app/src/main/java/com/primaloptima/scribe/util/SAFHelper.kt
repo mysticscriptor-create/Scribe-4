@@ -42,45 +42,46 @@ object SAFHelper {
      * Copies a user-picked image URI into the app's private storage so it survives
      * force-stop and process death without requiring any ongoing URI permission.
      *
+     * Each theme gets its own isolated folder: `filesDir/bg_images/<themeId>/`.
+     * This means saving one theme never touches another theme's files.
+     *
+     * Within that folder we keep exactly ONE original file (`original.<ext>`),
+     * overwriting any previous original for that theme. The crop output is a
+     * separate fixed-name file (`crop.jpg`) written by the crop screen.
+     * Together they are the only two files ever present per theme folder.
+     *
      * Background: ActivityResultContracts.GetContent() grants only a *temporary*
-     * URI permission tied to the activity session.  takePersistableUriPermission()
-     * works for most MediaStore URIs but silently fails for Google Photos export
-     * URIs, cloud-backed providers, and some OEM gallery apps.  Copying to
-     * app-private storage (`filesDir/bg_images/`) is the only universal fix.
+     * URI permission tied to the activity session. takePersistableUriPermission()
+     * silently fails for Google Photos export URIs, cloud-backed providers, and
+     * some OEM gallery apps. Copying to app-private storage is the only universal fix.
      *
-     * Removes stale bg_images files beyond a rolling window of [keepCount] files
-     * so storage doesn't grow unboundedly.
-     *
-     * Returns the `file://` Uri of the copied file, or null on failure (caller
+     * Returns the `file://` Uri of the copied original, or null on failure (caller
      * should fall back to takePersistablePermission + original uri).
      */
     suspend fun copyBgImageToInternalStorage(
         context: Context,
         sourceUri: Uri,
-        keepCount: Int = 6
+        themeId: String
     ): Uri? = withContext(Dispatchers.IO) {
         try {
-            val dir = File(context.filesDir, "bg_images").also { it.mkdirs() }
+            // Per-theme folder — completely isolated from every other theme.
+            val dir = File(context.filesDir, "bg_images/$themeId").also { it.mkdirs() }
 
-            // Determine extension from MIME type
-            val mimeType = context.contentResolver.getType(sourceUri) ?: "image/png"
+            // Determine extension from MIME type so we preserve format fidelity.
+            val mimeType = context.contentResolver.getType(sourceUri) ?: "image/jpeg"
             val ext = when {
                 mimeType.contains("jpeg") || mimeType.contains("jpg") -> "jpg"
                 mimeType.contains("webp") -> "webp"
-                else -> "png"
+                mimeType.contains("png")  -> "png"
+                else -> "jpg"
             }
 
-            val dest = File(dir, "theme_bg_${System.currentTimeMillis()}.$ext")
+            // Fixed filename — overwrites the previous original for this theme.
+            // No timestamp needed: there is only ever one original per theme.
+            val dest = File(dir, "original.$ext")
             context.contentResolver.openInputStream(sourceUri)?.use { input ->
                 dest.outputStream().use { output -> input.copyTo(output) }
             }
-
-            // Prune old copies beyond keepCount, sorted oldest-first
-            dir.listFiles()
-                ?.filter { it.name.startsWith("theme_bg_") }
-                ?.sortedBy { it.lastModified() }
-                ?.dropLast(keepCount)
-                ?.forEach { it.delete() }
 
             Uri.fromFile(dest)
         } catch (_: Exception) {
@@ -93,6 +94,38 @@ object SAFHelper {
             } catch (_: Exception) { /* best-effort */ }
             null
         }
+    }
+
+    /**
+     * Deletes the entire image folder for [themeId].
+     * Called when a theme is deleted so its storage is fully reclaimed.
+     * Safe to call if the folder does not exist yet.
+     */
+    fun deleteThemeImageFolder(context: Context, themeId: String) {
+        File(context.filesDir, "bg_images/$themeId").deleteRecursively()
+    }
+
+    /**
+     * Copies the image folder of [sourceThemeId] into a new folder for [destThemeId].
+     * Used when duplicating a theme so the duplicate has its own independent copy
+     * of the images and will not interfere with the source if either is later edited.
+     *
+     * Returns true if any files were copied, false if the source had no images.
+     */
+    fun copyThemeImageFolder(
+        context: Context,
+        sourceThemeId: String,
+        destThemeId: String
+    ): Boolean {
+        val src = File(context.filesDir, "bg_images/$sourceThemeId")
+        if (!src.exists() || !src.isDirectory) return false
+        val dst = File(context.filesDir, "bg_images/$destThemeId").also { it.mkdirs() }
+        var copied = false
+        src.listFiles()?.forEach { file ->
+            file.copyTo(File(dst, file.name), overwrite = true)
+            copied = true
+        }
+        return copied
     }
 
     // ── Read / Write ──────────────────────────────────────────────────────────

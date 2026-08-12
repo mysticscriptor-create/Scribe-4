@@ -1,6 +1,5 @@
 package com.primaloptima.scribe.ui.screens
 
-import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,67 +18,129 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.livedata.observeAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import android.graphics.Bitmap
+import android.os.Build
 import com.primaloptima.scribe.ui.theme.LocalHazeState
+import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
-import com.primaloptima.scribe.ui.theme.frostedFab
+import com.primaloptima.scribe.ui.components.ScribeSpeedDialFab
+import com.primaloptima.scribe.ui.components.SpeedDialItem
 import com.primaloptima.scribe.ui.theme.FrostedDialog
+import com.primaloptima.scribe.ui.theme.frostedContainerColor
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
+import com.primaloptima.scribe.util.BitmapBlur
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.primaloptima.scribe.MainActivity
 import com.primaloptima.scribe.ScribeApp
 import com.primaloptima.scribe.data.Folder
 import com.primaloptima.scribe.data.Note
 import com.primaloptima.scribe.util.CoverUtils
-import com.primaloptima.scribe.util.MarkdownUtil
 import com.primaloptima.scribe.viewmodel.BookViewModel
+import com.primaloptima.scribe.viewmodel.DashboardViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.ui.graphics.graphicsLayer
+import com.primaloptima.scribe.ui.components.ScribeCard
+import com.primaloptima.scribe.ui.components.ScribeCardTokens
+import com.primaloptima.scribe.ui.components.ScribeContentCard
+import com.primaloptima.scribe.ui.components.ScribeProgressBar
+import com.primaloptima.scribe.ui.components.ScribeStripCard
+import com.primaloptima.scribe.ui.theme.LocalAccentColor
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BookScreen(
     vm: BookViewModel,
-    onBack: () -> Unit
+    dashboardVm: DashboardViewModel,
+    onBack: () -> Unit,
+    onOpenNote: (noteId: String) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
-    val book by vm.book.observeAsState()
-    val notes by vm.notes.observeAsState(emptyList())
-    val folders by vm.folders.observeAsState(emptyList())
-    val viewMode by vm.viewMode.observeAsState(BookViewModel.ViewMode.LIST)
-
-    // Bottom Bar tab state inside BookScreen: 0: Write, 1: Statistics
-    var selectedTab by remember { mutableIntStateOf(0) }
-
-    // FAB expanded state
+    // One-shot blurred capture for pre-API-31 frosted glass (FABs + dialogs)
+    val view = LocalView.current
+    val blurRadiusPx = com.primaloptima.scribe.ui.theme.LocalFrostedBlurRadius.current.toInt().coerceIn(1, 25)
+    var oneShotBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var captured by remember { mutableStateOf(false) }
     var isFabExpanded by remember { mutableStateOf(false) }
 
-    // Dialog states
+    // Dialog states declared early so captureForDialog can reference them
     var showCreateNoteDialog by remember { mutableStateOf(false) }
     var showCreateFolderDialog by remember { mutableStateOf(false) }
     var noteToRename by remember { mutableStateOf<Note?>(null) }
     var noteToDelete by remember { mutableStateOf<Note?>(null) }
+
+    var dialogOneShotBitmap by remember { mutableStateOf<Bitmap?>(null) }
+
+    // Clear dialog bitmap when all dialogs close.
+    val anyDialogOpen = showCreateNoteDialog || showCreateFolderDialog ||
+            noteToRename != null || noteToDelete != null
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        // FAB expanded: capture before the sub-FABs animate in (they are inline
+        // composables so they render the same frame isFabExpanded becomes true).
+        LaunchedEffect(isFabExpanded) {
+            if (isFabExpanded && !captured) {
+                captured = true
+                val raw = BitmapBlur.captureOnly(view)  // Main thread (LaunchedEffect default)
+                oneShotBitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    raw?.let { BitmapBlur.blurBitmap(it, radius = blurRadiusPx) }
+                }
+            } else if (!isFabExpanded) {
+                captured = false
+                oneShotBitmap = null
+            }
+        }
+        LaunchedEffect(anyDialogOpen) {
+            if (!anyDialogOpen) dialogOneShotBitmap = null
+        }
+    }
+
+    // KEY FIX: capture BEFORE setting the show flag so FrostedDialog's first
+    // composition already has a valid blur bitmap behind it.
+    val captureForDialog: suspend (() -> Unit) -> Unit = { openDialog ->
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            val raw = BitmapBlur.captureOnly(view)
+            dialogOneShotBitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                raw?.let { BitmapBlur.blurBitmap(it, radius = blurRadiusPx) }
+            }
+        }
+        openDialog()
+    }
+
+    val book by vm.book.collectAsStateWithLifecycle()
+    val notes by vm.notes.collectAsStateWithLifecycle()
+    val folders by vm.folders.collectAsStateWithLifecycle()
+    val viewMode by vm.viewMode.collectAsStateWithLifecycle()
+    val sortMode by vm.sortMode.collectAsStateWithLifecycle()
+
+    // ── Ongoing project state ─────────────────────────────────────────────────
+    val ongoingBookId by dashboardVm.ongoingProjectBookId.collectAsStateWithLifecycle()
+
+    // Bottom Bar tab state inside BookScreen: 0: Write, 1: Statistics
+    var selectedTab by remember { mutableIntStateOf(0) }
+
+    // (dialog state vars declared above near capture block)
     var selectedFolderPath by remember { mutableStateOf("/") }
 
     val coverPickerLauncher = rememberLauncherForActivityResult(
@@ -115,6 +176,7 @@ fun BookScreen(
 
     val hazeState = LocalHazeState.current
 
+    CompositionLocalProvider(LocalOneShotBitmap provides oneShotBitmap) {
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -154,7 +216,7 @@ fun BookScreen(
 
                 Spacer(modifier = Modifier.weight(1f))
                 TextButton(
-                    onClick = { showCreateFolderDialog = true },
+                    onClick = { scope.launch { captureForDialog { showCreateFolderDialog = true } } },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp)
@@ -169,6 +231,7 @@ fun BookScreen(
         Scaffold(
             containerColor = Color.Transparent,
             modifier = Modifier.then(swipeGestureModifier),
+            contentWindowInsets = WindowInsets.systemBars,
             topBar = {
                 TopAppBar(
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -224,6 +287,45 @@ fun BookScreen(
                                 }
                             )
                             HorizontalDivider()
+                            // ── Ongoing project ───────────────────────────────
+                            val thisBookId = book?.id
+                            val isOngoing = thisBookId != null && ongoingBookId == thisBookId
+                            if (isOngoing) {
+                                DropdownMenuItem(
+                                    text = { Text("Remove from Ongoing Project") },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.BookmarkRemove,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    },
+                                    onClick = {
+                                        showSortMenu = false
+                                        homeVm.clearOngoingProject()
+                                    }
+                                )
+                            } else {
+                                DropdownMenuItem(
+                                    text = { Text("Set as Ongoing Project") },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Bookmark,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    },
+                                    onClick = {
+                                        showSortMenu = false
+                                        if (thisBookId != null) {
+                                            // Phase 6-E: homeVm.setOngoingProject also inserts
+                                            // the /Chapters folder — no manual DB call needed.
+                                            homeVm.setOngoingProject(thisBookId)
+                                        }
+                                    }
+                                )
+                            }
+                            HorizontalDivider()
                             DropdownMenuItem(
                                 text = { Text("Sort by Date Updated") },
                                 onClick = {
@@ -270,95 +372,26 @@ fun BookScreen(
             },
             floatingActionButton = {
                 if (selectedTab == 0) {
-                    Column(
-                        horizontalAlignment = Alignment.End,
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        AnimatedVisibility(
-                            visible = isFabExpanded,
-                            enter = fadeIn() + expandVertically(),
-                            exit = fadeOut() + shrinkVertically()
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.End,
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Surface(
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = MaterialTheme.colorScheme.surfaceVariant,
-                                        tonalElevation = 4.dp
-                                    ) {
-                                        Text(
-                                            "Text",
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                    SmallFloatingActionButton(
-                                        onClick = {
-                                            isFabExpanded = false
-                                            showCreateNoteDialog = true
-                                        },
-                                        containerColor = MaterialTheme.colorScheme.primary,
-                                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                                        modifier = Modifier.frostedFab(LocalHazeState.current)
-                                    ) {
-                                        Icon(Icons.Default.Description, contentDescription = "New Text File")
-                                    }
+                    ScribeSpeedDialFab(
+                        items = listOf(
+                            SpeedDialItem(
+                                icon = Icons.Default.Description,
+                                label = "New Text File",
+                                onClick = {
+                                    scope.launch { captureForDialog { showCreateNoteDialog = true } }
                                 }
-
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Surface(
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = MaterialTheme.colorScheme.surfaceVariant,
-                                        tonalElevation = 4.dp
-                                    ) {
-                                        Text(
-                                            "Folder",
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                    SmallFloatingActionButton(
-                                        onClick = {
-                                            isFabExpanded = false
-                                            showCreateFolderDialog = true
-                                        },
-                                        // Was secondaryContainer (M3 purple default) — now uses themed accent
-                                        containerColor = MaterialTheme.colorScheme.primary,
-                                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                                        modifier = Modifier.frostedFab(LocalHazeState.current)
-                                    ) {
-                                        Icon(Icons.Default.CreateNewFolder, contentDescription = "New Folder")
-                                    }
+                            ),
+                            SpeedDialItem(
+                                icon = Icons.Default.CreateNewFolder,
+                                label = "New Folder",
+                                onClick = {
+                                    scope.launch { captureForDialog { showCreateFolderDialog = true } }
                                 }
-                            }
-                        }
-
-                        val rotation by animateFloatAsState(targetValue = if (isFabExpanded) 45f else 0f)
-
-                        FloatingActionButton(
-                            onClick = { isFabExpanded = !isFabExpanded },
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.frostedFab(LocalHazeState.current)
-                        ) {
-                            Icon(
-                                Icons.Default.Add,
-                                contentDescription = "New Item",
-                                modifier = Modifier.rotate(rotation)
                             )
-                        }
-                    }
+                        ),
+                        expanded = isFabExpanded,
+                        onExpandedChange = { isFabExpanded = it }
+                    )
                 }
             }
         ) { padding ->
@@ -387,7 +420,7 @@ fun BookScreen(
                         }
 
                         Column(modifier = Modifier.fillMaxSize()) {
-                            ScrollableTabRow(
+                            PrimaryScrollableTabRow(
                                 selectedTabIndex = pagerState.currentPage,
                                 edgePadding = 16.dp
                             ) {
@@ -437,27 +470,14 @@ fun BookScreen(
                                         verticalArrangement = Arrangement.spacedBy(8.dp),
                                         modifier = Modifier.fillMaxSize()
                                     ) {
-                                        items(pageNotes, key = { it.id }) { note ->
+                                        items(pageNotes, key = { note -> "${sortMode}_${note.id}" }) { note ->
                                             NoteListRow(
                                                 note = note,
-                                                onClick = {
-                                                    context.startActivity(
-                                                        Intent(context, MainActivity::class.java)
-                                                            .putExtra(MainActivity.EXTRA_NOTE_ID, note.id)
-                                                            .putExtra(MainActivity.EXTRA_BOOK_ID, vm.bookId)
-                                                    )
-                                                },
-                                                onOpenFloat = {
-                                                    context.startActivity(
-                                                        Intent(context, MainActivity::class.java)
-                                                            .putExtra(MainActivity.EXTRA_NOTE_ID, note.id)
-                                                            .putExtra(MainActivity.EXTRA_BOOK_ID, vm.bookId)
-                                                            .putExtra("openInFloat", true)
-                                                    )
-                                                },
-                                                onRename = { noteToRename = note },
+                                                onClick = { onOpenNote(note.id) },
+                                                onOpenFloat = { onOpenNote(note.id) },
+                                                onRename = { scope.launch { captureForDialog { noteToRename = note } } },
                                                 onDuplicate = { vm.duplicateNote(note.id) },
-                                                onDelete = { noteToDelete = note }
+                                                onDelete = { scope.launch { captureForDialog { noteToDelete = note } } }
                                             )
                                         }
                                     }
@@ -469,24 +489,11 @@ fun BookScreen(
                         TreeModeView(
                             notes = notes,
                             folders = folders,
-                            onNoteClick = { note ->
-                                context.startActivity(
-                                    Intent(context, MainActivity::class.java)
-                                        .putExtra(MainActivity.EXTRA_NOTE_ID, note.id)
-                                        .putExtra(MainActivity.EXTRA_BOOK_ID, vm.bookId)
-                                )
-                            },
-                            onOpenFloat = { note ->
-                                context.startActivity(
-                                    Intent(context, MainActivity::class.java)
-                                        .putExtra(MainActivity.EXTRA_NOTE_ID, note.id)
-                                        .putExtra(MainActivity.EXTRA_BOOK_ID, vm.bookId)
-                                        .putExtra("openInFloat", true)
-                                )
-                            },
-                            onRename = { note -> noteToRename = note },
+                            onNoteClick = { note -> onOpenNote(note.id) },
+                            onOpenFloat = { note -> onOpenNote(note.id) },
+                            onRename = { note -> scope.launch { captureForDialog { noteToRename = note } } },
                             onDuplicate = { note -> vm.duplicateNote(note.id) },
-                            onDelete = { note -> noteToDelete = note }
+                            onDelete = { note -> scope.launch { captureForDialog { noteToDelete = note } } }
                         )
                     }
                 } else {
@@ -496,7 +503,10 @@ fun BookScreen(
         }
     }
 
-    // Dialogs
+    // Dialogs — wrapped in their own provider so dialogOneShotBitmap (not the FAB
+    // bitmap) is used, preventing the FAB collapse from clearing the blur before
+    // the dialog renders on Android 10.
+    CompositionLocalProvider(LocalOneShotBitmap provides dialogOneShotBitmap) {
     if (showCreateNoteDialog) {
         var noteTitle by remember { mutableStateOf("") }
         FrostedDialog(
@@ -518,11 +528,7 @@ fun BookScreen(
                         if (t.isNotEmpty()) {
                             vm.createNote(t, selectedFolderPath) { id ->
                                 showCreateNoteDialog = false
-                                context.startActivity(
-                                    Intent(context, MainActivity::class.java)
-                                        .putExtra(MainActivity.EXTRA_NOTE_ID, id)
-                                        .putExtra(MainActivity.EXTRA_BOOK_ID, vm.bookId)
-                                )
+                                onOpenNote(id)
                             }
                         }
                     }
@@ -614,6 +620,8 @@ fun BookScreen(
             }
         )
     }
+    } // end CompositionLocalProvider(LocalOneShotBitmap provides dialogOneShotBitmap)
+    } // end CompositionLocalProvider(LocalOneShotBitmap provides oneShotBitmap)
 }
 
 @Composable
@@ -664,7 +672,8 @@ private fun TreeModeView(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
+                        if (isExpanded) Icons.Default.KeyboardArrowDown
+                        else Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(24.dp)
@@ -706,14 +715,16 @@ private fun TreeModeView(
 
 @Composable
 private fun BookStatisticsTab(notes: List<Note>, bookTitle: String) {
+    val accentColor = LocalAccentColor.current
+    val onSurface   = MaterialTheme.colorScheme.onSurface
+    val outline     = MaterialTheme.colorScheme.outline
+
+    // Phase 6-E: use DB-backed word_count column — no Regex in UI layer
     val totalWords = remember(notes) {
-        notes.sumOf { n -> MarkdownUtil.countWords(n.content) }
+        notes.sumOf { it.wordCount }
     }
     val scoredNotes = remember(notes) {
-        notes.map { n ->
-            val count = MarkdownUtil.countWords(n.content)
-            n to count
-        }.sortedByDescending { it.second }
+        notes.map { n -> n to n.wordCount }.sortedByDescending { it.second }
     }
     val maxWords = (scoredNotes.firstOrNull()?.second ?: 1).coerceAtLeast(1).toFloat()
 
@@ -724,53 +735,182 @@ private fun BookStatisticsTab(notes: List<Note>, bookTitle: String) {
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text("Statistics for \"$bookTitle\"", fontSize = 18.sp, fontWeight = FontWeight.Bold)
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Card(modifier = Modifier.weight(1f)) {
-                Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("${notes.size}", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                    Text("Total Files", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+        // ── Stat summary card ──────────────────────────────────────────────
+        ScribeContentCard(title = "Statistics for \"$bookTitle\"") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 20.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment     = Alignment.CenterVertically
+            ) {
+                ScribeCard(
+                    modifier     = Modifier.weight(1f),
+                    cornerRadius = ScribeCardTokens.RadiusMedium,
+                    accentBorder = true,
+                    shine        = true
+                ) {
+                    Column(
+                        modifier            = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text       = "${notes.size}",
+                            fontSize   = 32.sp,
+                            fontWeight = FontWeight.Bold,
+                            color      = onSurface
+                        )
+                        Text(
+                            text     = "Total Files",
+                            fontSize = 12.sp,
+                            color    = outline
+                        )
+                    }
                 }
-            }
-            Card(modifier = Modifier.weight(1f)) {
-                Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("$totalWords", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                    Text("Total Words", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                ScribeCard(
+                    modifier     = Modifier.weight(1f),
+                    cornerRadius = ScribeCardTokens.RadiusMedium,
+                    accentBorder = true,
+                    shine        = true
+                ) {
+                    Column(
+                        modifier            = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text       = "$totalWords",
+                            fontSize   = 32.sp,
+                            fontWeight = FontWeight.Bold,
+                            color      = accentColor
+                        )
+                        Text(
+                            text     = "Total Words",
+                            fontSize = 12.sp,
+                            color    = outline
+                        )
+                    }
                 }
             }
         }
 
-        Text("Files Word Count Ranking", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        // ── Word count ranking card ────────────────────────────────────────
+        ScribeContentCard(title = "Files Word Count Ranking") {
+            if (scoredNotes.isEmpty()) {
+                Box(
+                    modifier         = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No files in this book", color = outline)
+                }
+            } else {
+                scoredNotes.forEachIndexed { index, (note, count) ->
+                    val ratio = (count / maxWords).coerceIn(0.05f, 1.0f)
 
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (scoredNotes.isEmpty()) {
-                    Text("No files in this book", color = MaterialTheme.colorScheme.outline)
-                } else {
-                    scoredNotes.forEach { (note, count) ->
-                        val ratio = (count / maxWords).coerceIn(0.05f, 1.0f)
-                        Column {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(note.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                                Text("$count words", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
-                            }
-                            Text(text = "Folder: ${note.folderPath}", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            LinearProgressIndicator(
-                                progress = { ratio },
+                    if (index > 0) {
+                        Box(
+                            modifier         = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(8.dp)
-                                    .clip(CircleShape)
+                                    .height(0.8.dp)
+                                    .background(
+                                        brush = Brush.horizontalGradient(
+                                            colors = listOf(
+                                                Color.Transparent,
+                                                accentColor.copy(alpha = 0.25f),
+                                                accentColor.copy(alpha = 0.25f),
+                                                Color.Transparent
+                                            )
+                                        )
+                                    )
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .graphicsLayer { rotationZ = 45f }
+                                    .background(accentColor.copy(alpha = 0.45f))
                             )
                         }
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier              = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment     = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment     = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier              = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            accentColor.copy(alpha = if (index == 0) 0.22f else 0.10f)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text       = "${index + 1}",
+                                        fontSize   = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color      = accentColor
+                                    )
+                                }
+                                Text(
+                                    text       = note.name,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize   = 14.sp,
+                                    color      = onSurface,
+                                    maxLines   = 1,
+                                    overflow   = TextOverflow.Ellipsis,
+                                    modifier   = Modifier.weight(1f)
+                                )
+                            }
+                            Text(
+                                text       = "$count words",
+                                fontSize   = 12.sp,
+                                color      = accentColor,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+
+                        Text(
+                            text     = "Folder: ${note.folderPath}",
+                            fontSize = 11.sp,
+                            color    = outline
+                        )
+
+                        ScribeProgressBar(
+                            progress = ratio,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                        )
                     }
                 }
             }
@@ -789,15 +929,15 @@ private fun NoteListRow(
     onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
-    val wordCount = remember(note.content) {
-        MarkdownUtil.countWords(note.content)
-    }
+    val accentColor = LocalAccentColor.current
+    val onSurface   = MaterialTheme.colorScheme.onSurface
 
+    // Phase 6-E: use DB-backed word_count column — no Regex in UI layer
+    val wordCount = note.wordCount
     val previewText = remember(note.content) {
         val lines = note.content.lineSequence().filter { it.isNotBlank() }.take(3).toList()
-        if (lines.isEmpty()) "No text content" else lines.joinToString("\n")
+        if (lines.isEmpty()) null else lines.joinToString("\n")
     }
-
     val createdStr = remember(note.createdAt) {
         SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault()).format(Date(note.createdAt))
     }
@@ -805,81 +945,75 @@ private fun NoteListRow(
         SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault()).format(Date(note.updatedAt))
     }
 
-    Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable { onClick() },
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .padding(12.dp)
-                .fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+    ScribeStripCard(
+        title           = note.name,
+        modifier        = modifier.fillMaxWidth(),
+        subtitle        = "$wordCount words · ${note.folderPath}",
+        preview         = previewText ?: "No text content",
+        previewMaxLines = 3,
+        footerLines     = listOf(
+            "Created: $createdStr",
+            "Modified: $modifiedStr"
+        ),
+        leading = {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(ScribeCardTokens.RadiusTiny))
+                    .background(accentColor.copy(alpha = 0.10f))
+                    .border(
+                        width = 0.8.dp,
+                        color = accentColor.copy(alpha = 0.20f),
+                        shape = RoundedCornerShape(ScribeCardTokens.RadiusTiny)
+                    ),
+                contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    Icons.Outlined.Description,
+                    imageVector        = Icons.Outlined.Description,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp)
+                    modifier           = Modifier.size(18.dp),
+                    tint               = accentColor.copy(alpha = 0.85f)
                 )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(note.name, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Text(
-                        text = "$wordCount words • ${note.folderPath}",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.primary
+            }
+        },
+        trailing = {
+            Box {
+                IconButton(onClick = { showMenu = true }) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = null,
+                        tint               = onSurface.copy(alpha = 0.60f)
                     )
                 }
-                Box {
-                    IconButton(onClick = { showMenu = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = null)
-                    }
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false },
-                        containerColor = LocalSolidSurface.current
-                    ) {
-                        DropdownMenuItem(text = { Text("Open") }, onClick = { showMenu = false; onClick() })
-                        DropdownMenuItem(text = { Text("Open in Floating Window") }, onClick = { showMenu = false; onOpenFloat() })
-                        DropdownMenuItem(text = { Text("Rename") }, onClick = { showMenu = false; onRename() })
-                        DropdownMenuItem(text = { Text("Duplicate") }, onClick = { showMenu = false; onDuplicate() })
-                        DropdownMenuItem(text = { Text("Delete") }, onClick = { showMenu = false; onDelete() })
-                    }
+                DropdownMenu(
+                    expanded         = showMenu,
+                    onDismissRequest = { showMenu = false },
+                    containerColor   = LocalSolidSurface.current
+                ) {
+                    DropdownMenuItem(
+                        text    = { Text("Open") },
+                        onClick = { showMenu = false; onClick() }
+                    )
+                    DropdownMenuItem(
+                        text    = { Text("Open in Floating Window") },
+                        onClick = { showMenu = false; onOpenFloat() }
+                    )
+                    DropdownMenuItem(
+                        text    = { Text("Rename") },
+                        onClick = { showMenu = false; onRename() }
+                    )
+                    DropdownMenuItem(
+                        text    = { Text("Duplicate") },
+                        onClick = { showMenu = false; onDuplicate() }
+                    )
+                    DropdownMenuItem(
+                        text    = { Text("Delete") },
+                        onClick = { showMenu = false; onDelete() }
+                    )
                 }
             }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // 3-line preview
-            Text(
-                text = previewText,
-                fontSize = 12.sp,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                lineHeight = 16.sp
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Created and Modified timestamps
-            Column {
-                Text(
-                    text = "Created: $createdStr",
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.outline
-                )
-                Text(
-                    text = "Modified: $modifiedStr",
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            }
-        }
-    }
+        },
+        onClick    = onClick,
+        wrapInCard = true
+    )
 }

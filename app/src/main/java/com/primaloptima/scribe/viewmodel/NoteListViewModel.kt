@@ -3,19 +3,23 @@ package com.primaloptima.scribe.viewmodel
 import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.LiveData
-import androidx.lifecycle.MutableLiveData
-import androidx.lifecycle.asLiveData
 import androidx.lifecycle.viewModelScope
-import com.google.gson.Gson
 import com.primaloptima.scribe.ScribeApp
+import com.primaloptima.scribe.util.AppJson
 import com.primaloptima.scribe.data.Book
 import com.primaloptima.scribe.data.Folder
 import com.primaloptima.scribe.data.Note
 import com.primaloptima.scribe.util.SAFHelper
 import com.primaloptima.scribe.util.model.ExternalRoot
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 import com.primaloptima.scribe.util.model.SafScanResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -23,20 +27,21 @@ class NoteListViewModel(application: Application) : AndroidViewModel(application
 
     private val app = application as ScribeApp
     private val db = app.database
-    private val prefs = app.prefs
-    private val gson = Gson()
+    private val dataStore = app.dataStore
+    val notes: StateFlow<List<Note>> = db.noteDao().observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val notes: LiveData<List<Note>> = db.noteDao().observeAll().asLiveData()
-    val folders: LiveData<List<Folder>> = db.noteDao().observeFolders().asLiveData()
+    val folders: StateFlow<List<Folder>> = db.noteDao().observeFolders()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val _externalRoot = MutableLiveData<ExternalRoot?>()
-    val externalRoot: LiveData<ExternalRoot?> = _externalRoot
+    private val _externalRoot = MutableStateFlow<ExternalRoot?>(null)
+    val externalRoot: StateFlow<ExternalRoot?> = _externalRoot.asStateFlow()
 
-    private val _externalLoading = MutableLiveData(false)
-    val externalLoading: LiveData<Boolean> = _externalLoading
+    private val _externalLoading = MutableStateFlow(false)
+    val externalLoading: StateFlow<Boolean> = _externalLoading.asStateFlow()
 
-    private val _searchResults = MutableLiveData<List<Note>>(emptyList())
-    val searchResults: LiveData<List<Note>> = _searchResults
+    private val _searchResults = MutableStateFlow<List<Note>>(emptyList())
+    val searchResults: StateFlow<List<Note>> = _searchResults.asStateFlow()
 
     init {
         loadExternalRoot()
@@ -145,7 +150,7 @@ When you come back, read it aloud. The sentences that make you stumble are the s
         viewModelScope.launch {
             val exr = _externalRoot.value
             if (exr != null) {
-                val folder = folders.value?.firstOrNull { it.path == folderPath }
+                val folder = folders.value.firstOrNull { it.path == folderPath }
                 val parentUri = Uri.parse(folder?.externalUri ?: exr.uri)
                 try {
                     val uri = SAFHelper.createFile(getApplication(), parentUri, name, "md")
@@ -246,9 +251,9 @@ When you come back, read it aloud. The sentences that make you stumble are the s
 
     fun connectExternalFolder(uri: Uri, name: String) {
         val root = ExternalRoot(uri = uri.toString(), name = name)
-        prefs.externalRootJson = gson.toJson(root)
         _externalRoot.value = root
         SAFHelper.takePersistablePermission(getApplication(), uri)
+        viewModelScope.launch { dataStore.setExternalRootJson(AppJson.encodeToString(root)) }
         scanExternalFolder(root)
     }
 
@@ -262,7 +267,7 @@ When you come back, read it aloud. The sentences that make you stumble are the s
         try { SAFHelper.releasePersistablePermission(getApplication(), Uri.parse(root.uri)) }
         catch (_: Exception) {}
         _externalRoot.value = null
-        prefs.externalRootJson = null
+        viewModelScope.launch { dataStore.setExternalRootJson(null) }
         viewModelScope.launch(Dispatchers.IO) {
             db.noteDao().deleteAllExternal()
             db.noteDao().deleteAllExternalFolders()
@@ -270,9 +275,11 @@ When you come back, read it aloud. The sentences that make you stumble are the s
     }
 
     private fun loadExternalRoot() {
-        val json = prefs.externalRootJson ?: return
-        try { _externalRoot.value = gson.fromJson(json, ExternalRoot::class.java) }
-        catch (_: Exception) {}
+        viewModelScope.launch {
+            val json = dataStore.getExternalRootJson() ?: return@launch
+            try { _externalRoot.value = AppJson.decodeFromString<ExternalRoot>(json) }
+            catch (_: Exception) {}
+        }
     }
 
     private fun scanExternalFolder(root: ExternalRoot) {
@@ -320,12 +327,12 @@ When you come back, read it aloud. The sentences that make you stumble are the s
     }
 
     fun notesInFolder(folderPath: String): List<Note> =
-        (notes.value ?: emptyList()).filter { it.folderPath == folderPath }
+        notes.value.filter { it.folderPath == folderPath }
             .sortedByDescending { it.updatedAt }
 
     fun childFolders(folderPath: String): List<Folder> {
         val prefix = if (folderPath == "/") "/" else "$folderPath/"
-        return (folders.value ?: emptyList()).filter { folder ->
+        return folders.value.filter { folder ->
             folder.path != folderPath
                 && folder.path.startsWith(prefix)
                 && !folder.path.removePrefix(prefix).contains("/")

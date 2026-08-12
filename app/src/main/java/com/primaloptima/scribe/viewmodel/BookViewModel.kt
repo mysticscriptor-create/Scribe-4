@@ -2,16 +2,16 @@ package com.primaloptima.scribe.viewmodel
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.LiveData
-import androidx.lifecycle.MutableLiveData
-import androidx.lifecycle.asLiveData
 import androidx.lifecycle.viewModelScope
 import com.primaloptima.scribe.ScribeApp
 import com.primaloptima.scribe.data.Book
 import com.primaloptima.scribe.data.Folder
 import com.primaloptima.scribe.data.Note
+import com.primaloptima.scribe.data.WorldEntry
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -25,24 +25,24 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     var bookId: String = Note.DEFAULT_BOOK_ID
         private set
 
-    private val _book = MutableLiveData<Book?>()
-    val book: LiveData<Book?> = _book
+    private val _book = MutableStateFlow<Book?>(null)
+    val book: StateFlow<Book?> = _book.asStateFlow()
 
-    private val _notes = MutableLiveData<List<Note>>(emptyList())
-    val notes: LiveData<List<Note>> = _notes
+    private val _notes = MutableStateFlow<List<Note>>(emptyList())
+    val notes: StateFlow<List<Note>> = _notes.asStateFlow()
 
-    private val _folders = MutableLiveData<List<Folder>>(emptyList())
-    val folders: LiveData<List<Folder>> = _folders
+    private val _folders = MutableStateFlow<List<Folder>>(emptyList())
+    val folders: StateFlow<List<Folder>> = _folders.asStateFlow()
 
-    private val _worldEntries = MutableLiveData<List<com.primaloptima.scribe.data.WorldEntry>>(emptyList())
-    val worldEntries: LiveData<List<com.primaloptima.scribe.data.WorldEntry>> = _worldEntries
+    private val _worldEntries = MutableStateFlow<List<WorldEntry>>(emptyList())
+    val worldEntries: StateFlow<List<WorldEntry>> = _worldEntries.asStateFlow()
 
     // ── View mode ─────────────────────────────────────────────────────────────
 
     enum class ViewMode { LIST, TREE }
 
-    private val _viewMode = MutableLiveData(ViewMode.LIST)
-    val viewMode: LiveData<ViewMode> = _viewMode
+    private val _viewMode = MutableStateFlow(ViewMode.LIST)
+    val viewMode: StateFlow<ViewMode> = _viewMode.asStateFlow()
 
     fun toggleViewMode() {
         _viewMode.value = if (_viewMode.value == ViewMode.LIST) ViewMode.TREE else ViewMode.LIST
@@ -52,8 +52,8 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
 
     enum class SortMode { DATE_UPDATED, DATE_CREATED, TITLE_AZ }
 
-    private val _sortMode = MutableLiveData(SortMode.DATE_UPDATED)
-    val sortMode: LiveData<SortMode> = _sortMode
+    private val _sortMode = MutableStateFlow(SortMode.DATE_UPDATED)
+    val sortMode: StateFlow<SortMode> = _sortMode.asStateFlow()
 
     fun setSortMode(mode: SortMode) { _sortMode.value = mode; reload() }
 
@@ -75,23 +75,21 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 SortMode.TITLE_AZ -> notes.sortedBy { it.name.lowercase() }
                 else -> notes.sortedByDescending { it.updatedAt }
             }
-            withContext(Dispatchers.Main) {
-                _book.value = book
-                _notes.value = sortedNotes
-                _folders.value = folders.sortedBy { it.path }
-                _worldEntries.value = world
-            }
+            _book.value = book
+            _notes.value = sortedNotes
+            _folders.value = folders.sortedBy { it.path }
+            _worldEntries.value = world
         }
     }
 
     // ── Tree helpers ──────────────────────────────────────────────────────────
 
     fun notesInFolder(folderPath: String): List<Note> =
-        (_notes.value ?: emptyList()).filter { it.folderPath == folderPath }
+        _notes.value.filter { it.folderPath == folderPath }
 
     fun childFolders(parentPath: String): List<Folder> {
         val prefix = if (parentPath == "/") "/" else "$parentPath/"
-        return (_folders.value ?: emptyList()).filter { folder ->
+        return _folders.value.filter { folder ->
             folder.path != parentPath
                 && folder.path.startsWith(prefix)
                 && !folder.path.removePrefix(prefix).contains("/")
@@ -110,7 +108,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         val result = mutableListOf<TreeItem>()
         fun addFolder(path: String, depth: Int) {
             if (path != "/") {
-                val folder = (_folders.value ?: emptyList()).find { it.path == path } ?: return
+                val folder = _folders.value.find { it.path == path } ?: return
                 result.add(TreeItem.FolderItem(folder, depth))
             }
             notesInFolder(path).forEach { result.add(TreeItem.NoteItem(it, depth)) }

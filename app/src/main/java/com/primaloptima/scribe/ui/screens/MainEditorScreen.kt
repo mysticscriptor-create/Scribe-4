@@ -1,6 +1,5 @@
 package com.primaloptima.scribe.ui.screens
 
-import android.content.Intent
 import android.net.Uri
 import android.text.Editable
 import android.text.TextWatcher
@@ -24,11 +23,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.livedata.observeAsState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,18 +39,29 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
+import android.graphics.Bitmap
+import android.os.Build
 import com.primaloptima.scribe.ui.theme.LocalHazeState
+import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
+import com.primaloptima.scribe.ui.components.ScribeSingleFab
 import com.primaloptima.scribe.ui.theme.frostedFab
 import com.primaloptima.scribe.ui.theme.frostedPanel
 import com.primaloptima.scribe.ui.theme.FrostedDialog
+import com.primaloptima.scribe.ui.theme.frostedContainerColor
+import com.primaloptima.scribe.ui.theme.frostedCard
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
+import com.primaloptima.scribe.ui.theme.LocalAppTheme
+import com.primaloptima.scribe.util.BitmapBlur
+import androidx.compose.ui.platform.LocalView
 import com.primaloptima.scribe.ui.util.rememberKeyboardVisibility
 import dev.chrisbanes.haze.hazeSource
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -62,7 +75,6 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.primaloptima.scribe.*
 import com.primaloptima.scribe.data.Folder
 import com.primaloptima.scribe.data.Note
 import com.primaloptima.scribe.data.WorldEntry
@@ -85,7 +97,12 @@ fun MainEditorScreen(
     noteListVm: NoteListViewModel,
     shortcutsVm: ShortcutsViewModel,
     initialNoteId: String?,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onOpenShortcuts: () -> Unit,
+    onOpenGuide: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenSheets: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -93,12 +110,74 @@ fun MainEditorScreen(
     val leftDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val rightDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
-    val activeNote by editorVm.activeNote.observeAsState()
-    val wordCount by editorVm.wordCount.observeAsState(0)
-    val charCount by editorVm.charCount.observeAsState(0)
-    val outline by editorVm.outline.observeAsState(emptyList())
-    val zenMode by editorVm.zenMode.observeAsState(false)
-    val activeTheme by editorVm.theme.observeAsState()
+    // One-shot blurred captures for pre-API-31 frosted glass.
+    // Captured once when each drawer starts opening; cleared when it closes.
+    val view = LocalView.current
+    val blurRadiusPx = com.primaloptima.scribe.ui.theme.LocalFrostedBlurRadius.current.toInt().coerceIn(1, 25)
+    var leftOneShotBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var rightOneShotBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    // Track whether we've already captured for the current open gesture
+    var leftCaptured by remember { mutableStateOf(false) }
+    var rightCaptured by remember { mutableStateOf(false) }
+    var dialogOneShotBitmap by remember { mutableStateOf<Bitmap?>(null) }
+
+    // Persistent blur bitmap for always-visible bars and FABs on Android 10.
+    // Captured once after the background image has rendered (150ms delay),
+    // and refreshed whenever the theme/background changes.
+    var barBlurBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    val editorTheme = LocalAppTheme.current
+    val editorBgUri = editorTheme?.backgroundImageUri
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        LaunchedEffect(editorBgUri) {
+            barBlurBitmap = null
+            if (!editorBgUri.isNullOrEmpty()) {
+                kotlinx.coroutines.delay(150)
+                val raw = BitmapBlur.captureOnly(view)
+                barBlurBitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    raw?.let { BitmapBlur.blurBitmap(it, radius = blurRadiusPx) }
+                }
+            }
+        }
+    }
+
+
+    // Trigger capture when drawers start sliding open (pre-API-31 only)
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        LaunchedEffect(leftDrawerState.currentValue, leftDrawerState.targetValue) {
+            if (leftDrawerState.targetValue == DrawerValue.Open && !leftCaptured) {
+                leftCaptured = true
+                val raw = BitmapBlur.captureOnly(view)  // must stay on Main thread
+                leftOneShotBitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    raw?.let { BitmapBlur.blurBitmap(it, radius = blurRadiusPx) }
+                }
+            } else if (leftDrawerState.currentValue == DrawerValue.Closed &&
+                       leftDrawerState.targetValue == DrawerValue.Closed) {
+                leftCaptured = false
+                leftOneShotBitmap = null
+            }
+        }
+        LaunchedEffect(rightDrawerState.currentValue, rightDrawerState.targetValue) {
+            if (rightDrawerState.targetValue == DrawerValue.Open && !rightCaptured) {
+                rightCaptured = true
+                val rawRight = BitmapBlur.captureOnly(view)  // must stay on Main thread
+                rightOneShotBitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    rawRight?.let { BitmapBlur.blurBitmap(it, radius = blurRadiusPx) }
+                }
+            } else if (rightDrawerState.currentValue == DrawerValue.Closed &&
+                       rightDrawerState.targetValue == DrawerValue.Closed) {
+                rightCaptured = false
+                rightOneShotBitmap = null
+            }
+        }
+
+    }
+
+    val activeNote by editorVm.activeNote.collectAsStateWithLifecycle()
+    val wordCount by editorVm.wordCount.collectAsStateWithLifecycle()
+    val charCount by editorVm.charCount.collectAsStateWithLifecycle()
+    val outline by editorVm.outline.collectAsStateWithLifecycle()
+    val zenMode by editorVm.zenMode.collectAsStateWithLifecycle()
+    val activeTheme by editorVm.theme.collectAsStateWithLifecycle()
     val bgUri = activeTheme?.backgroundImageUri
     val bgMode = activeTheme?.bgMode ?: "color"
     val themeScope = activeTheme?.themeScope ?: "editor_only"
@@ -107,20 +186,20 @@ fun MainEditorScreen(
     val hasBgImage = !bgUri.isNullOrEmpty() && bgMode != "color"
     val isEditorOnlyBg = hasBgImage && themeScope == "editor_only"
 
-    val currentBookNotes by bookVm.notes.observeAsState(emptyList())
-    val currentBookFolders by bookVm.folders.observeAsState(emptyList())
-    val worldEntries by bookVm.worldEntries.observeAsState(emptyList())
+    val currentBookNotes by bookVm.notes.collectAsStateWithLifecycle()
+    val currentBookFolders by bookVm.folders.collectAsStateWithLifecycle()
+    val worldEntries by bookVm.worldEntries.collectAsStateWithLifecycle()
 
-    val allNotes by noteListVm.notes.observeAsState(emptyList())
-    val allFolders by noteListVm.folders.observeAsState(emptyList())
-    val shortcuts by shortcutsVm.shortcuts.observeAsState(emptyList())
+    val allNotes by noteListVm.notes.collectAsStateWithLifecycle()
+    val allFolders by noteListVm.folders.collectAsStateWithLifecycle()
+    val shortcuts by shortcutsVm.shortcuts.collectAsStateWithLifecycle()
 
-    val floatingWindows by editorVm.floatingWindows.observeAsState(emptyList())
+    val floatingWindows by editorVm.floatingWindows.collectAsStateWithLifecycle()
 
-    val pinnedTopNotes by editorVm.pinnedTopNotes.observeAsState(emptyList())
-    val pinnedTopIndex by editorVm.pinnedTopIndex.observeAsState(0)
-    val pinnedBottomNotes by editorVm.pinnedBottomNotes.observeAsState(emptyList())
-    val pinnedBottomIndex by editorVm.pinnedBottomIndex.observeAsState(0)
+    val pinnedTopNotes by editorVm.pinnedTopNotes.collectAsStateWithLifecycle()
+    val pinnedTopIndex by editorVm.pinnedTopIndex.collectAsStateWithLifecycle()
+    val pinnedBottomNotes by editorVm.pinnedBottomNotes.collectAsStateWithLifecycle()
+    val pinnedBottomIndex by editorVm.pinnedBottomIndex.collectAsStateWithLifecycle()
 
     var rightDrawerTab by remember { mutableIntStateOf(0) } // 0: Pinned, 1: Outline
     var leftPanelTab by remember { mutableIntStateOf(0) } // 0: Files, 1: World Sheet
@@ -135,8 +214,32 @@ fun MainEditorScreen(
     var showCreateNoteDialog by remember { mutableStateOf(false) }
     var filePickerTargetSlot by remember { mutableStateOf<String?>(null) } // "top" or "bottom"
 
+    // Clear dialog bitmap when all dialogs close.
+    val anyDialogOpen = showRenameDialog || showCreateNoteDialog || filePickerTargetSlot != null
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        LaunchedEffect(anyDialogOpen) {
+            if (!anyDialogOpen) dialogOneShotBitmap = null
+        }
+    }
+
+    // KEY FIX: capture BEFORE setting the show flag so FrostedDialog's first
+    // composition already has a valid blur bitmap behind it.
+    val captureForDialog: suspend (() -> Unit) -> Unit = { openDialog ->
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            val raw = BitmapBlur.captureOnly(view)
+            dialogOneShotBitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                raw?.let { BitmapBlur.blurBitmap(it, radius = blurRadiusPx) }
+            }
+        }
+        openDialog()
+    }
+
     var editorRef by remember { mutableStateOf<ScribeEditText?>(null) }
-    var loadedNoteId by remember { mutableStateOf<String?>(null) }
+    // Bug 2 fix: rememberSaveable instead of remember so loadedNoteId survives
+    // recomposition when returning from History. Without this, loadedNoteId resets
+    // to null on recompose, the AndroidView update lambda sees a mismatched id,
+    // and setText() overwrites the editor with stale DB content.
+    var loadedNoteId by rememberSaveable { mutableStateOf<String?>(null) }
     val expandedTreeState = remember { mutableStateMapOf<String, Boolean>() }
 
     // Floating pill state
@@ -149,7 +252,7 @@ fun MainEditorScreen(
     var isPositiveDelta by remember { mutableStateOf(true) }
 
     // Daily writing goal — sourced from ViewModel so it matches the user-defined goal
-    val goalProgress by editorVm.goalProgress.observeAsState(0f)
+    val goalProgress by editorVm.goalProgress.collectAsStateWithLifecycle()
     var goalNotified by remember { mutableStateOf(false) }
 
     LaunchedEffect(wordCount) {
@@ -253,6 +356,7 @@ fun MainEditorScreen(
             drawerState = leftDrawerState,
             gesturesEnabled = true,
             drawerContent = {
+                CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap) {
                 ModalDrawerSheet(
                     drawerContainerColor = Color.Transparent,
                     modifier = Modifier
@@ -341,7 +445,8 @@ fun MainEditorScreen(
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Icon(
-                                                    if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
+                                                    if (isExpanded) Icons.Default.KeyboardArrowDown
+                                                    else Icons.AutoMirrored.Filled.KeyboardArrowRight,
                                                     contentDescription = null,
                                                     modifier = Modifier.size(18.dp)
                                                 )
@@ -637,7 +742,7 @@ fun MainEditorScreen(
                         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
                         // Bottom Tab Bar (Files / World Sheet)
-                        TabRow(selectedTabIndex = leftPanelTab, modifier = Modifier.fillMaxWidth()) {
+                        PrimaryTabRow(selectedTabIndex = leftPanelTab, modifier = Modifier.fillMaxWidth()) {
                             Tab(
                                 selected = leftPanelTab == 0,
                                 onClick = { leftPanelTab = 0 },
@@ -653,6 +758,7 @@ fun MainEditorScreen(
                         }
                     }
                 }
+                } // end CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap)
             }
         ) {
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
@@ -661,6 +767,7 @@ fun MainEditorScreen(
                     gesturesEnabled = true,
                     drawerContent = {
                         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        CompositionLocalProvider(LocalOneShotBitmap provides rightOneShotBitmap) {
                             ModalDrawerSheet(
                                 drawerContainerColor = Color.Transparent,
                                 modifier = Modifier
@@ -668,7 +775,7 @@ fun MainEditorScreen(
                                     .frostedPanel(LocalHazeState.current)
                             ) {
                                 Spacer(modifier = Modifier.height(12.dp))
-                                TabRow(selectedTabIndex = rightDrawerTab) {
+                                PrimaryTabRow(selectedTabIndex = rightDrawerTab) {
                                     Tab(
                                         selected = rightDrawerTab == 0,
                                         onClick = { rightDrawerTab = 0 },
@@ -695,8 +802,8 @@ fun MainEditorScreen(
                                             modifier = Modifier
                                                 .weight(1f)
                                                 .fillMaxWidth()
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                                .frostedCard(LocalHazeState.current, RoundedCornerShape(12.dp),
+                                                    applyFallbackBackground = true)
                                         ) {
                                             val currentTopId = pinnedTopNotes.getOrNull(pinnedTopIndex)
                                             val currentTopNote = remember(currentTopId, allNotes, worldEntries) {
@@ -710,7 +817,7 @@ fun MainEditorScreen(
                                                 Column(
                                                     modifier = Modifier
                                                         .fillMaxSize()
-                                                        .clickable { filePickerTargetSlot = "top" },
+                                                        .clickable { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
                                                     horizontalAlignment = Alignment.CenterHorizontally,
                                                     verticalArrangement = Arrangement.Center
                                                 ) {
@@ -767,13 +874,13 @@ fun MainEditorScreen(
                                                 ) {
                                                     if (pinnedTopNotes.size > 1) {
                                                         IconButton(onClick = { editorVm.prevPinnedTop() }, modifier = Modifier.size(24.dp)) {
-                                                            Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "Prev", modifier = Modifier.size(16.dp))
+                                                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Prev", modifier = Modifier.size(16.dp))
                                                         }
                                                         IconButton(onClick = { editorVm.nextPinnedTop() }, modifier = Modifier.size(24.dp)) {
-                                                            Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Next", modifier = Modifier.size(16.dp))
+                                                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next", modifier = Modifier.size(16.dp))
                                                         }
                                                     }
-                                                    IconButton(onClick = { filePickerTargetSlot = "top" }, modifier = Modifier.size(24.dp)) {
+                                                    IconButton(onClick = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } }, modifier = Modifier.size(24.dp)) {
                                                         Icon(Icons.Default.SwapHoriz, contentDescription = "Switch Note", modifier = Modifier.size(16.dp))
                                                     }
                                                     IconButton(onClick = { editorVm.loadNote(currentTopNote.id) }, modifier = Modifier.size(24.dp)) {
@@ -793,8 +900,8 @@ fun MainEditorScreen(
                                             modifier = Modifier
                                                 .weight(1f)
                                                 .fillMaxWidth()
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                                .frostedCard(LocalHazeState.current, RoundedCornerShape(12.dp),
+                                                    applyFallbackBackground = true)
                                         ) {
                                             val currentBottomId = pinnedBottomNotes.getOrNull(pinnedBottomIndex)
                                             val currentBottomNote = remember(currentBottomId, allNotes, worldEntries) {
@@ -808,7 +915,7 @@ fun MainEditorScreen(
                                                 Column(
                                                     modifier = Modifier
                                                         .fillMaxSize()
-                                                        .clickable { filePickerTargetSlot = "bottom" },
+                                                        .clickable { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
                                                     horizontalAlignment = Alignment.CenterHorizontally,
                                                     verticalArrangement = Arrangement.Center
                                                 ) {
@@ -865,13 +972,13 @@ fun MainEditorScreen(
                                                 ) {
                                                     if (pinnedBottomNotes.size > 1) {
                                                         IconButton(onClick = { editorVm.prevPinnedBottom() }, modifier = Modifier.size(24.dp)) {
-                                                            Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "Prev", modifier = Modifier.size(16.dp))
+                                                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Prev", modifier = Modifier.size(16.dp))
                                                         }
                                                         IconButton(onClick = { editorVm.nextPinnedBottom() }, modifier = Modifier.size(24.dp)) {
-                                                            Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Next", modifier = Modifier.size(16.dp))
+                                                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next", modifier = Modifier.size(16.dp))
                                                         }
                                                     }
-                                                    IconButton(onClick = { filePickerTargetSlot = "bottom" }, modifier = Modifier.size(24.dp)) {
+                                                    IconButton(onClick = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } }, modifier = Modifier.size(24.dp)) {
                                                         Icon(Icons.Default.SwapHoriz, contentDescription = "Switch Note", modifier = Modifier.size(16.dp))
                                                     }
                                                     IconButton(onClick = { editorVm.loadNote(currentBottomNote.id) }, modifier = Modifier.size(24.dp)) {
@@ -952,6 +1059,7 @@ fun MainEditorScreen(
                                 }
                             }
                         }
+                        } // end CompositionLocalProvider(LocalOneShotBitmap provides rightOneShotBitmap)
                     }
                 ) {
                     val hazeState = LocalHazeState.current
@@ -960,7 +1068,9 @@ fun MainEditorScreen(
                         Scaffold(
                             containerColor = Color.Transparent,
                             modifier = Modifier.then(swipeGestureModifier),
+                            contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.ime),
                             topBar = {
+                                CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
                                 if (!zenMode) {
                                     Column {
                                         TopAppBar(
@@ -988,7 +1098,7 @@ fun MainEditorScreen(
                                                     overflow = TextOverflow.Ellipsis,
                                                     color = titleColor,
                                                     modifier = titleModifier.clickable {
-                                                        if (activeNote != null) showRenameDialog = true
+                                                        if (activeNote != null) scope.launch { captureForDialog { showRenameDialog = true } }
                                                     }
                                                 )
                                             },
@@ -999,8 +1109,12 @@ fun MainEditorScreen(
                                                 IconButton(onClick = { showFindBar = !showFindBar }) {
                                                     Icon(Icons.Default.Search, contentDescription = "Find")
                                                 }
-                                                IconButton(onClick = { editorVm.toggleZen() }) {
-                                                    Icon(Icons.Default.Fullscreen, contentDescription = "Zen Mode")
+                                                IconButton(onClick = {
+                                                    val text = editorRef?.text?.toString() ?: activeNote?.content ?: ""
+                                                    editorVm.saveManualSnapshot(text)
+                                                    Toast.makeText(context, "Checkpoint saved", Toast.LENGTH_SHORT).show()
+                                                }) {
+                                                    Icon(Icons.Default.BookmarkAdd, contentDescription = "Save Checkpoint")
                                                 }
 
                                                 var showMenu by remember { mutableStateOf(false) }
@@ -1053,28 +1167,37 @@ fun MainEditorScreen(
                                                         text = { Text("Version History") },
                                                         onClick = {
                                                             showMenu = false
-                                                            context.startActivity(Intent(context, HistoryActivity::class.java))
+                                                            // Flush unsaved content to DB before navigating away.
+                                                            // Navigation Compose destroys and recreates the Editor
+                                                            // composable on return from the back stack, so setText()
+                                                            // will be called with note.content read from the DB.
+                                                            // Without this flush, anything typed within the 500ms
+                                                            // autosave debounce window is silently discarded.
+                                                            editorRef?.text?.toString()?.let { currentText ->
+                                                                editorVm.flushContent(currentText)
+                                                            }
+                                                            onOpenHistory()
                                                         }
                                                     )
                                                     DropdownMenuItem(
                                                         text = { Text("Shortcuts") },
                                                         onClick = {
                                                             showMenu = false
-                                                            context.startActivity(Intent(context, ShortcutsActivity::class.java))
+                                                            onOpenShortcuts()
                                                         }
                                                     )
                                                     DropdownMenuItem(
                                                         text = { Text("User Guide") },
                                                         onClick = {
                                                             showMenu = false
-                                                            context.startActivity(Intent(context, GuideActivity::class.java))
+                                                            onOpenGuide()
                                                         }
                                                     )
                                                     DropdownMenuItem(
                                                         text = { Text("Settings") },
                                                         onClick = {
                                                             showMenu = false
-                                                            context.startActivity(Intent(context, SettingsActivity::class.java))
+                                                            onOpenSettings()
                                                         }
                                                     )
                                                 }
@@ -1092,29 +1215,25 @@ fun MainEditorScreen(
                                         )
                                     }
                                 }
+                                } // end CompositionLocalProvider(barBlurBitmap for topBar)
                             },
                             bottomBar = {
+                                CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
                                 val isKeyboardVisible = rememberKeyboardVisibility()
                                 AnimatedVisibility(
-                                    visible = !zenMode && isKeyboardVisible,
+                                    visible = isKeyboardVisible,
                                     enter = slideInVertically(initialOffsetY = { it }),
                                     exit = slideOutVertically(targetOffsetY = { it })
                                 ) {
-                                    Surface(
-                                        shadowElevation = 8.dp,
-                                        color = Color.Transparent,
+                                    Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .frostedBar(hazeState)
+                                            .horizontalScroll(rememberScrollState())
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .horizontalScroll(rememberScrollState())
-                                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
                                             FormatButton(label = "B") { editorRef?.applyFormat("**", "**") }
                                             FormatButton(label = "I") { editorRef?.applyFormat("*", "*") }
                                             FormatButton(label = "H1") { editorRef?.applyLinePrefix("# ") }
@@ -1135,7 +1254,7 @@ fun MainEditorScreen(
                                         }
                                     }
                                 }
-                            }
+                                } // end CompositionLocalProvider(barBlurBitmap for bottomBar)
                         ) { padding ->
                             Box(
                                 modifier = Modifier
@@ -1198,6 +1317,38 @@ fun MainEditorScreen(
                                     val currentThemePrimary = MaterialTheme.colorScheme.primary
                                     val hasBgImage = !activeTheme?.backgroundImageUri.isNullOrEmpty()
 
+                                    Box(modifier = Modifier.fillMaxSize()) {
+                                    // Gesture wrapper: AndroidView is a child so PointerEventPass.Initial
+                                    // fires here BEFORE the editor sees the touch. Double-taps are
+                                    // consumed (blocking the editor); single taps pass through normally.
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .pointerInput(Unit) {
+                                                val doubleTapTimeout = viewConfiguration.doubleTapTimeoutMillis
+                                                val doubleTapMinTime = viewConfiguration.doubleTapMinTimeMillis
+                                                awaitPointerEventScope {
+                                                    var lastTapTime = 0L
+                                                    while (true) {
+                                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                        val down = event.changes.firstOrNull() ?: continue
+                                                        if (down.pressed && !down.previousPressed) {
+                                                            val now = System.currentTimeMillis()
+                                                            val diff = now - lastTapTime
+                                                            if (diff in doubleTapMinTime..doubleTapTimeout) {
+                                                                // Double tap — consume and toggle zen
+                                                                down.consume()
+                                                                editorVm.toggleZen()
+                                                                lastTapTime = 0L
+                                                            } else {
+                                                                // Single tap — don't consume, let it reach the editor
+                                                                lastTapTime = now
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                    ) {
                                     AndroidView(
                                         factory = { ctx ->
                                             ScrollView(ctx).apply {
@@ -1243,17 +1394,20 @@ fun MainEditorScreen(
                                             }
 
                                             activeNote?.let { note ->
-                                                if (loadedNoteId != note.id) {
-                                                    loadedNoteId = note.id
-                                                    editorRef?.setText(note.content)
-                                                }
-                                            }
+    val edit = editorRef
+    if (edit != null && (loadedNoteId != note.id || edit.text.isNullOrEmpty() && note.content.isNotEmpty())) {
+        loadedNoteId = note.id
+        edit.setText(note.content)
+    }
+}
                                         },
                                         modifier = Modifier.fillMaxSize()
                                     )
-                                }
+                                    } // end gesture-detection Box
 
-                                // Floating Word Count Pill
+                                // Floating Word Count Pill + Zen FAB — always visible,
+                                // so use barBlurBitmap (not dialogOneShotBitmap).
+                                CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
                                 Box(
                                     modifier = Modifier
                                         .align(Alignment.TopEnd)
@@ -1277,11 +1431,13 @@ fun MainEditorScreen(
 
                                         Surface(
                                             shape = CircleShape,
-                                            color = MaterialTheme.colorScheme.primaryContainer.copy(
-                                                alpha = if (LocalHazeState.current != null) 0.55f else 1f
+                                            color = frostedContainerColor(
+                                                fallback = MaterialTheme.colorScheme.primaryContainer
                                             ),
-                                            shadowElevation = 6.dp,
+                                            tonalElevation = 0.dp,
+                                            shadowElevation = 0.dp,
                                             modifier = Modifier
+                                                .clip(CircleShape)
                                                 .frostedFab(LocalHazeState.current)
                                                 .pointerInput(Unit) {
                                                     detectDragGestures { change, dragAmount ->
@@ -1316,17 +1472,17 @@ fun MainEditorScreen(
                                 }
 
                                 if (zenMode) {
-                                    FloatingActionButton(
-                                        onClick = { editorVm.setZen(false) },
+                                    ScribeSingleFab(
+                                        icon = Icons.Default.FullscreenExit,
+                                        contentDescription = "Exit Zen",
                                         modifier = Modifier
                                             .align(Alignment.BottomEnd)
-                                            .padding(16.dp)
-                                            .frostedFab(LocalHazeState.current)
-                                    ) {
-                                        Icon(Icons.Default.FullscreenExit, contentDescription = "Exit Zen")
-                                    }
+                                            .padding(16.dp),
+                                        onClick = { editorVm.setZen(false) }
+                                    )
                                 }
-                            }
+                                } // end CompositionLocalProvider(barBlurBitmap for FABs)
+                            } // end editor Box
                         }
                     }
                 }
@@ -1351,87 +1507,91 @@ fun MainEditorScreen(
             onToggleCollapse = { id -> editorVm.toggleCollapseFloatingWindow(id) },
             onMoveWindow = { id, x, y -> editorVm.moveFloatingWindow(id, x, y) }
         )
-    }
 
-    if (showRenameDialog && activeNote != null) {
-        val noteToRename = activeNote // captured to avoid race during recomposition
-        var renameText by remember { mutableStateOf(noteToRename?.name ?: "") }
-        FrostedDialog(
-            onDismissRequest = { showRenameDialog = false },
-            title = { Text("Rename Note") },
-            text = {
-                OutlinedTextField(
-                    value = renameText,
-                    onValueChange = { renameText = it },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val t = renameText.trim()
-                        if (t.isNotEmpty() && noteToRename != null) {
-                            bookVm.renameNote(noteToRename.id, t)
+        CompositionLocalProvider(LocalOneShotBitmap provides dialogOneShotBitmap) {
+        if (showRenameDialog && activeNote != null) {
+            val noteToRename = activeNote
+            var renameText by remember { mutableStateOf(noteToRename?.name ?: "") }
+            FrostedDialog(
+                onDismissRequest = { showRenameDialog = false },
+                title = { Text("Rename Note") },
+                text = {
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { renameText = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val t = renameText.trim()
+                            if (t.isNotEmpty() && noteToRename != null) {
+                                bookVm.renameNote(noteToRename.id, t)
+                            }
+                            showRenameDialog = false
                         }
-                        showRenameDialog = false
-                    }
-                ) { Text("Rename") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRenameDialog = false }) { Text("Cancel") }
-            }
-        )
-    }
+                    ) { Text("Rename") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRenameDialog = false }) { Text("Cancel") }
+                }
+            )
+        }
 
-    if (showCreateNoteDialog) {
-        var noteTitle by remember { mutableStateOf("") }
-        FrostedDialog(
-            onDismissRequest = { showCreateNoteDialog = false },
-            title = { Text("New Note") },
-            text = {
-                OutlinedTextField(
-                    value = noteTitle,
-                    onValueChange = { noteTitle = it },
-                    label = { Text("Title") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val t = noteTitle.trim()
-                        if (t.isNotEmpty()) {
-                            bookVm.createNote(t) { id ->
-                                showCreateNoteDialog = false
-                                editorVm.loadNote(id)
+        if (showCreateNoteDialog) {
+            var noteTitle by remember { mutableStateOf("") }
+            FrostedDialog(
+                onDismissRequest = { showCreateNoteDialog = false },
+                title = { Text("New Note") },
+                text = {
+                    OutlinedTextField(
+                        value = noteTitle,
+                        onValueChange = { noteTitle = it },
+                        label = { Text("Title") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val t = noteTitle.trim()
+                            if (t.isNotEmpty()) {
+                                bookVm.createNote(t) { id ->
+                                    showCreateNoteDialog = false
+                                    editorVm.loadNote(id)
+                                }
                             }
                         }
-                    }
-                ) { Text("Create") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreateNoteDialog = false }) { Text("Cancel") }
-            }
-        )
-    }
-
-    filePickerTargetSlot?.let { targetSlot ->
-        FileExplorerOverlayDialog(
-            allNotes = if (leftDrawerMode == "Current") currentBookNotes else allNotes,
-            allFolders = if (leftDrawerMode == "Current") currentBookFolders else allFolders,
-            onSelectNote = { note ->
-                if (targetSlot == "top") {
-                    editorVm.addPinnedTop(note.id)
-                } else {
-                    editorVm.addPinnedBottom(note.id)
+                    ) { Text("Create") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showCreateNoteDialog = false }) { Text("Cancel") }
                 }
-                filePickerTargetSlot = null
-            },
-            onDismiss = { filePickerTargetSlot = null }
-        )
+            )
+        }
+
+        filePickerTargetSlot?.let { targetSlot ->
+            FileExplorerOverlayDialog(
+                allNotes = if (leftDrawerMode == "Current") currentBookNotes else allNotes,
+                allFolders = if (leftDrawerMode == "Current") currentBookFolders else allFolders,
+                onSelectNote = { note ->
+                    if (targetSlot == "top") {
+                        editorVm.addPinnedTop(note.id)
+                    } else {
+                        editorVm.addPinnedBottom(note.id)
+                    }
+                    filePickerTargetSlot = null
+                },
+                onDismiss = { filePickerTargetSlot = null }
+            )
+        }
+        } // end CompositionLocalProvider(LocalOneShotBitmap provides dialogOneShotBitmap)
     }
+        } // end ModalNavigationDrawer
+    } // end outer Box
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1474,7 +1634,8 @@ private fun FileExplorerOverlayDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
+                                if (isExpanded) Icons.Default.KeyboardArrowDown
+                                else Icons.AutoMirrored.Filled.KeyboardArrowRight,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp)
                             )
