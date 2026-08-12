@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Scribe"
 include(":app")
+// include(":baselineprofile")  // Fix 4 (DISABLED on Termux — re-enable when building on a machine with emulator/device)

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Splash background colors per built-in theme -->
+    <color name="splash_bg_obsidian">#1A1A1A</color>
+    <color name="splash_bg_midnight">#0D1B2A</color>
+    <color name="splash_bg_focus">#000000</color>
+    <color name="splash_bg_paper">#FAFAF7</color>
+    <color name="splash_bg_sepia">#F5ECD7</color>
+    <color name="splash_bg_typewriter">#FFFFFF</color>
+
+    <!-- Splash icon (accent) colors per built-in theme -->
+    <color name="splash_icon_obsidian">#E0E0E0</color>
+    <color name="splash_icon_midnight">#90CAF9</color>
+    <color name="splash_icon_focus">#CCCCCC</color>
+    <color name="splash_icon_paper">#333333</color>
+    <color name="splash_icon_sepia">#6B4C2A</color>
+    <color name="splash_icon_typewriter">#222222</color>
+
+    <!-- Fallback slots for custom themes (written at runtime via PrefsManager) -->
+    <color name="splash_bg_custom">#1A1A1A</color>
+    <color name="splash_icon_custom">#FFFFFF</color>
+</resources>

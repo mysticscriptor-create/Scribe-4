@@ -24,84 +24,22 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Scribe"
+        android:enableOnBackInvokedCallback="true"
         tools:targetApi="31">
 
-        <!-- ── Launcher: books homepage ──────────────────────────────── -->
+        <!-- ── Single activity host ───────────────────────────────────────── -->
         <activity
-            android:name=".HomeActivity"
+            android:name=".ScribeActivity"
             android:exported="true"
+            android:theme="@style/Theme.Scribe.Splash.Dynamic"
             android:launchMode="singleTop"
-            android:windowSoftInputMode="adjustPan"
+            android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- ── Book interior (files / folders) ──────────────────────── -->
-        <activity
-            android:name=".BookActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:parentActivityName=".HomeActivity"
-            android:windowSoftInputMode="adjustPan"
-            android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />
-
-        <!-- ── Editor ─────────────────────────────────────────────────── -->
-        <activity
-            android:name=".MainActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:parentActivityName=".BookActivity"
-            android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />
-
-        <!-- Settings -->
-        <activity
-            android:name=".SettingsActivity"
-            android:exported="false"
-            android:parentActivityName=".HomeActivity"
-            android:windowSoftInputMode="adjustPan" />
-
-        <!-- Theme list -->
-        <activity
-            android:name=".ThemeListActivity"
-            android:exported="false"
-            android:parentActivityName=".SettingsActivity" />
-
-        <!-- Theme editor -->
-        <activity
-            android:name=".ThemeEditActivity"
-            android:exported="false"
-            android:parentActivityName=".ThemeListActivity"
-            android:windowSoftInputMode="adjustResize" />
-
-        <!-- Version history -->
-        <activity
-            android:name=".HistoryActivity"
-            android:exported="false"
-            android:parentActivityName=".MainActivity" />
-
-        <!-- Character / Location sheets -->
-        <activity
-            android:name=".SheetsActivity"
-            android:exported="false"
-            android:parentActivityName=".MainActivity"
-            android:windowSoftInputMode="adjustResize" />
-
-        <!-- Custom shortcuts -->
-        <activity
-            android:name=".ShortcutsActivity"
-            android:exported="false"
-            android:parentActivityName=".MainActivity"
-            android:windowSoftInputMode="adjustResize" />
-
-        <!-- Guide / welcome screen -->
-        <activity
-            android:name=".GuideActivity"
-            android:exported="false"
-            android:parentActivityName=".HomeActivity" />
 
         <!-- Crash reporter — uses a built-in system theme so it can never
              itself crash due to missing custom resources. -->

@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+        One splash style per built-in theme.
+        HomeActivity reads activeThemeId from prefs and calls
+        setSplashScreenTheme() with the matching style before installSplashScreen().
+        This is the only way to make both bg color AND icon tint theme-aware
+        across all API levels supported by the SplashScreen compat library.
+    -->
+
+    <style name="Theme.Scribe.Splash.Obsidian" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_bg_obsidian</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/scribe_splash_mark_vector</item>
+        <item name="postSplashScreenTheme">@style/Theme.Scribe</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@color/splash_bg_obsidian</item>
+        <item name="android:navigationBarColor">@color/splash_bg_obsidian</item>
+    </style>
+
+    <style name="Theme.Scribe.Splash.Midnight" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_bg_midnight</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/scribe_splash_mark_vector</item>
+        <item name="postSplashScreenTheme">@style/Theme.Scribe</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@color/splash_bg_midnight</item>
+        <item name="android:navigationBarColor">@color/splash_bg_midnight</item>
+    </style>
+
+    <style name="Theme.Scribe.Splash.Focus" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_bg_focus</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/scribe_splash_mark_vector</item>
+        <item name="postSplashScreenTheme">@style/Theme.Scribe</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@color/splash_bg_focus</item>
+        <item name="android:navigationBarColor">@color/splash_bg_focus</item>
+    </style>
+
+    <style name="Theme.Scribe.Splash.Paper" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_bg_paper</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/scribe_splash_mark_vector</item>
+        <item name="postSplashScreenTheme">@style/Theme.Scribe</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:statusBarColor">@color/splash_bg_paper</item>
+        <item name="android:navigationBarColor">@color/splash_bg_paper</item>
+    </style>
+
+    <style name="Theme.Scribe.Splash.Sepia" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_bg_sepia</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/scribe_splash_mark_vector</item>
+        <item name="postSplashScreenTheme">@style/Theme.Scribe</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:statusBarColor">@color/splash_bg_sepia</item>
+        <item name="android:navigationBarColor">@color/splash_bg_sepia</item>
+    </style>
+
+    <style name="Theme.Scribe.Splash.Typewriter" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_bg_typewriter</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/scribe_splash_mark_vector</item>
+        <item name="postSplashScreenTheme">@style/Theme.Scribe</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:statusBarColor">@color/splash_bg_typewriter</item>
+        <item name="android:navigationBarColor">@color/splash_bg_typewriter</item>
+    </style>
+
+    <!-- Custom theme fallback: colors written to prefs by PrefsManager when theme changes -->
+    <style name="Theme.Scribe.Splash.Custom" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_bg_custom</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/scribe_splash_mark_vector</item>
+        <item name="postSplashScreenTheme">@style/Theme.Scribe</item>
+        <item name="android:statusBarColor">@color/splash_bg_custom</item>
+        <item name="android:navigationBarColor">@color/splash_bg_custom</item>
+    </style>
+
+    <!-- Legacy - kept for compatibility, no longer used as entry point -->
+    <style name="Theme.Scribe.Splash.Dynamic" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/md_theme_light_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/scribe_splash_mark_vector</item>
+        <item name="postSplashScreenTheme">@style/Theme.Scribe</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:statusBarColor">@color/md_theme_light_background</item>
+        <item name="android:navigationBarColor">@color/md_theme_light_background</item>
+    </style>
+
+</resources>
