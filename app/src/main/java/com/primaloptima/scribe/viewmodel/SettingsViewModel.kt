@@ -102,3 +102,30 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setManualCheckpointSlots(v: Int)      { viewModelScope.launch { dataStore.setManualCheckpointSlots(v) } }
     fun setAutoHistoryMinWords(v: Int)        { viewModelScope.launch { dataStore.setAutoHistoryMinWords(v) } }
 }
+
+// Computes (currentStreak, longestStreak) from a list of "yyyy-MM-dd" date strings.
+// Mirrors the logic in DashboardViewModel so SettingsViewModel can work independently.
+private fun computeStreaks(dates: List<String>): Pair<Int, Int> {
+    if (dates.isEmpty()) return 0 to 0
+    val format = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    val sorted = dates.mapNotNull { format.parse(it) }.sortedDescending()
+    if (sorted.isEmpty()) return 0 to 0
+    val today = format.parse(format.format(Date())) ?: return 0 to 0
+    val oneDayMs = 86_400_000L
+    val gapFromToday = (today.time - sorted.first().time) / oneDayMs
+    var current = 0
+    if (gapFromToday <= 1) {
+        current = 1
+        for (i in 1 until sorted.size) {
+            val gap = (sorted[i - 1].time - sorted[i].time) / oneDayMs
+            if (gap == 1L) current++ else break
+        }
+    }
+    var longest = 1
+    var run = 1
+    for (i in 1 until sorted.size) {
+        val gap = (sorted[i - 1].time - sorted[i].time) / oneDayMs
+        if (gap == 1L) { run++; longest = maxOf(longest, run) } else run = 1
+    }
+    return current to maxOf(longest, current)
+}

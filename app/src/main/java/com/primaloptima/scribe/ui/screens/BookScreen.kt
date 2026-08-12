@@ -302,7 +302,7 @@ fun BookScreen(
                                     },
                                     onClick = {
                                         showSortMenu = false
-                                        homeVm.clearOngoingProject()
+                                        dashboardVm.clearOngoingProject()
                                     }
                                 )
                             } else {
@@ -318,9 +318,9 @@ fun BookScreen(
                                     onClick = {
                                         showSortMenu = false
                                         if (thisBookId != null) {
-                                            // Phase 6-E: homeVm.setOngoingProject also inserts
+                                            // Phase 6-E: dashboardVm.setOngoingProject also inserts
                                             // the /Chapters folder — no manual DB call needed.
-                                            homeVm.setOngoingProject(thisBookId)
+                                            dashboardVm.setOngoingProject(thisBookId)
                                         }
                                     }
                                 )
