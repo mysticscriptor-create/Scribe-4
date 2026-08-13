@@ -20,7 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.navigation3.ListDetailSceneStrategy
 import androidx.compose.material3.adaptive.navigation3.rememberListDetailSceneStrategy
-import androidx.navigation3.ui.DialogSceneStrategy
+import androidx.navigation3.scene.DialogSceneStrategy
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
@@ -141,7 +141,7 @@ class ScribeActivity : ComponentActivity() {
         var activeEditorVm by remember { mutableStateOf<EditorViewModel?>(null) }
 
         // Phase 3: two-pane strategy for tablets/foldables. On phones it is a no-op.
-        val listDetailStrategy = rememberListDetailSceneStrategy<Route>()
+        val listDetailStrategy = rememberListDetailSceneStrategy<NavKey>()
 
         // Phase 2: hazeSource centralised here so screens don't need it individually.
         val hazeState = com.primaloptima.scribe.ui.theme.LocalHazeState.current
