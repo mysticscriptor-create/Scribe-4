@@ -106,6 +106,10 @@ fun HomeScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    // Snap to Closed on first composition so the drawer's internal Animatable starts
+    // at its correct off-screen position. Without this, NavDisplay's slide-in transition
+    // causes a single-frame flash as the Animatable animates from 0 → closed offset.
+    LaunchedEffect(Unit) { drawerState.snapTo(DrawerValue.Closed) }
     var rightPanelVisible by remember { mutableStateOf(false) }
     var fabExpanded by remember { mutableStateOf(false) }
 
@@ -261,7 +265,8 @@ fun HomeScreen(
                 // screen content — no drawer pixels, no recomposition yet.
                 // rawDrawerBitmap assignment triggers the IO blur LaunchedEffect
                 // which runs in parallel with the opening animation.
-                if (drawerState.isClosed && startX < size.width * 0.3f && totalX > threshold) {
+                if (drawerState.isClosed && !drawerState.isAnimationRunning
+                        && startX < size.width * 0.3f && totalX > threshold) {
                     change.consume()
                     scope.launch { drawerState.open() }
                 }

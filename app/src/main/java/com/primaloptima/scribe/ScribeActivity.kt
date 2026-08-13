@@ -10,6 +10,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -176,13 +177,15 @@ class ScribeActivity : ComponentActivity() {
                 // as of Nav3 1.1.x — do NOT add it manually (duplicate/crash risk).
                 rememberViewModelStoreNavEntryDecorator()
             ),
-            // Default transition for all screens: fade.
+            // Default transition for all screens: eased fade.
             // Book and Editor override this with slide via entry-level metadata below.
             transitionSpec = {
-                fadeIn(animationSpec = tween(200)) togetherWith fadeOut(animationSpec = tween(200))
+                fadeIn(animationSpec = tween(280, easing = FastOutSlowInEasing)) togetherWith
+                    fadeOut(animationSpec = tween(200, easing = FastOutSlowInEasing))
             },
             popTransitionSpec = {
-                fadeIn(animationSpec = tween(200)) togetherWith fadeOut(animationSpec = tween(200))
+                fadeIn(animationSpec = tween(280, easing = FastOutSlowInEasing)) togetherWith
+                    fadeOut(animationSpec = tween(200, easing = FastOutSlowInEasing))
             },
             entryProvider = entryProvider {
 
@@ -224,10 +227,22 @@ class ScribeActivity : ComponentActivity() {
                 entry<Route.Book>(
                     metadata = ListDetailSceneStrategy.listPane() + metadata {
                         put(NavDisplay.TransitionKey) {
-                            slideInHorizontally { it } togetherWith slideOutHorizontally { -it }
+                            (slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
+                                + fadeIn(tween(160, easing = FastOutSlowInEasing))) togetherWith
+                            (slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { (-it * 0.3f).toInt() }
+                                + fadeOut(tween(160, easing = FastOutSlowInEasing)))
                         }
                         put(NavDisplay.PopTransitionKey) {
-                            slideInHorizontally { -it } togetherWith slideOutHorizontally { it }
+                            (slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { (-it * 0.3f).toInt() }
+                                + fadeIn(tween(160, easing = FastOutSlowInEasing))) togetherWith
+                            (slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
+                                + fadeOut(tween(160, easing = FastOutSlowInEasing)))
+                        }
+                        put(NavDisplay.PredictivePopTransitionKey) { _ ->
+                            (slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { (-it * 0.3f).toInt() }
+                                + fadeIn(tween(160, easing = FastOutSlowInEasing))) togetherWith
+                            (slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
+                                + fadeOut(tween(160, easing = FastOutSlowInEasing)))
                         }
                     }
                 ) { key ->
@@ -251,10 +266,22 @@ class ScribeActivity : ComponentActivity() {
                 entry<Route.Editor>(
                     metadata = ListDetailSceneStrategy.detailPane() + metadata {
                         put(NavDisplay.TransitionKey) {
-                            slideInHorizontally { it } togetherWith slideOutHorizontally { -it }
+                            (slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
+                                + fadeIn(tween(160, easing = FastOutSlowInEasing))) togetherWith
+                            (slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { (-it * 0.3f).toInt() }
+                                + fadeOut(tween(160, easing = FastOutSlowInEasing)))
                         }
                         put(NavDisplay.PopTransitionKey) {
-                            slideInHorizontally { -it } togetherWith slideOutHorizontally { it }
+                            (slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { (-it * 0.3f).toInt() }
+                                + fadeIn(tween(160, easing = FastOutSlowInEasing))) togetherWith
+                            (slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
+                                + fadeOut(tween(160, easing = FastOutSlowInEasing)))
+                        }
+                        put(NavDisplay.PredictivePopTransitionKey) { _ ->
+                            (slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { (-it * 0.3f).toInt() }
+                                + fadeIn(tween(160, easing = FastOutSlowInEasing))) togetherWith
+                            (slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
+                                + fadeOut(tween(160, easing = FastOutSlowInEasing)))
                         }
                     }
                 ) { key ->

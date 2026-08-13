@@ -107,8 +107,15 @@ fun MainEditorScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val leftDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val leftDrawerState  = rememberDrawerState(initialValue = DrawerValue.Closed)
     val rightDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    // Snap both drawers to Closed on first composition — prevents the 1-frame flash
+    // visible during NavDisplay slide transitions (drawer Animatables initialise at
+    // offset 0 before clamping to their off-screen closed positions).
+    LaunchedEffect(Unit) {
+        leftDrawerState.snapTo(DrawerValue.Closed)
+        rightDrawerState.snapTo(DrawerValue.Closed)
+    }
 
     // One-shot blurred captures for pre-API-31 frosted glass.
     // Captured once when each drawer starts opening; cleared when it closes.
@@ -310,10 +317,12 @@ fun MainEditorScreen(
             onHorizontalDrag = { change, dragAmount ->
                 totalX += dragAmount
                 val threshold = 36.dp.toPx()
-                if (totalX > threshold && leftDrawerState.isClosed && startX < size.width * 0.5f) {
+                if (totalX > threshold && leftDrawerState.isClosed
+                        && !leftDrawerState.isAnimationRunning && startX < size.width * 0.5f) {
                     change.consume()
                     scope.launch { leftDrawerState.open() }
-                } else if (totalX < -threshold && rightDrawerState.isClosed && startX > size.width * 0.5f) {
+                } else if (totalX < -threshold && rightDrawerState.isClosed
+                        && !rightDrawerState.isAnimationRunning && startX > size.width * 0.5f) {
                     change.consume()
                     scope.launch { rightDrawerState.open() }
                 }

@@ -36,6 +36,9 @@ import android.graphics.Bitmap
 import android.os.Build
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import com.primaloptima.scribe.ui.theme.LocalHazeState
+import com.primaloptima.scribe.ui.theme.LocalBarBlurBitmap
+import com.primaloptima.scribe.ui.theme.FrostedPanelContent
+import com.primaloptima.scribe.ui.theme.frostedPanel
 import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
@@ -108,6 +111,10 @@ fun BookScreen(
     val context = LocalContext.current
     val scope   = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    // Snap to Closed on first composition — prevents 1-frame drawer flash during
+    // NavDisplay slide-in transition (drawer Animatable initialises at offset 0
+    // before it clamps to the closed position).
+    LaunchedEffect(Unit) { drawerState.snapTo(DrawerValue.Closed) }
 
     // Phase 1: shared transition locals
     val sharedTransitionScope = LocalSharedTransitionScope.current
@@ -207,7 +214,8 @@ fun BookScreen(
             onDragStart = { offset -> startX = offset.x; totalX = 0f },
             onHorizontalDrag = { change, dragAmount ->
                 totalX += dragAmount
-                if (drawerState.isClosed && startX < size.width * 0.5f && totalX > 36.dp.toPx()) {
+                if (drawerState.isClosed && !drawerState.isAnimationRunning
+                        && startX < size.width * 0.5f && totalX > 36.dp.toPx()) {
                     change.consume()
                     scope.launch { drawerState.open() }
                 }
@@ -221,7 +229,15 @@ fun BookScreen(
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            ModalDrawerSheet {
+            CompositionLocalProvider(LocalOneShotBitmap provides LocalBarBlurBitmap.current) {
+            ModalDrawerSheet(
+                drawerContainerColor = Color.Transparent,
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(0.78f)
+                    .frostedPanel(hazeState)
+            ) {
+                FrostedPanelContent {
                 Spacer(modifier = Modifier.height(24.dp))
                 Text(
                     text       = book?.title ?: "Book Folders",
@@ -255,7 +271,9 @@ fun BookScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("New Folder")
                 }
+                } // end FrostedPanelContent
             }
+            } // end CompositionLocalProvider(LocalBarBlurBitmap)
         }
     ) {
         Scaffold(
