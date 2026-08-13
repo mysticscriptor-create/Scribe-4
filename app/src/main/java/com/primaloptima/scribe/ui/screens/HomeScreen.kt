@@ -1100,7 +1100,7 @@ private fun BookGridCard(
                 val coverModifier = if (sharedTransitionScope != null && animatedContentScope != null) {
                     with(sharedTransitionScope) {
                         Modifier.fillMaxSize().sharedElement(
-                            state = rememberSharedContentState(key = "book_cover_${book.id}"),
+                            sharedContentState = rememberSharedContentState(key = "book_cover_${book.id}"),
                             animatedVisibilityScope = animatedContentScope
                         )
                     }
