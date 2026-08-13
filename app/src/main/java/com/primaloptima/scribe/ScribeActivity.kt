@@ -11,11 +11,12 @@ import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
@@ -177,15 +178,22 @@ class ScribeActivity : ComponentActivity() {
                 // as of Nav3 1.1.x — do NOT add it manually (duplicate/crash risk).
                 rememberViewModelStoreNavEntryDecorator()
             ),
-            // Default transition for all screens: eased fade.
-            // Book and Editor override this with slide via entry-level metadata below.
+            // Global default: fade-through.
+            // Old screen fades out quickly (90ms), new screen fades in after a brief
+            // pause (delayMillis = 90ms), giving the feel of turning a page rather than
+            // two screens crossing. Book uses shared-element bounds instead; Editor uses
+            // horizontal slide on pop only; modal screens override with vertical slide.
             transitionSpec = {
-                fadeIn(animationSpec = tween(280, easing = FastOutSlowInEasing)) togetherWith
-                    fadeOut(animationSpec = tween(200, easing = FastOutSlowInEasing))
+                fadeIn(
+                    animationSpec = tween(220, delayMillis = 90, easing = FastOutSlowInEasing)
+                ) togetherWith
+                    fadeOut(animationSpec = tween(90, easing = LinearEasing))
             },
             popTransitionSpec = {
-                fadeIn(animationSpec = tween(280, easing = FastOutSlowInEasing)) togetherWith
-                    fadeOut(animationSpec = tween(200, easing = FastOutSlowInEasing))
+                fadeIn(
+                    animationSpec = tween(220, delayMillis = 90, easing = FastOutSlowInEasing)
+                ) togetherWith
+                    fadeOut(animationSpec = tween(90, easing = LinearEasing))
             },
             entryProvider = entryProvider {
 
@@ -222,27 +230,31 @@ class ScribeActivity : ComponentActivity() {
                 }
 
                 // ── Book ─────────────────────────────────────────────────────
-                // Slide transition overrides the NavDisplay default fade.
-                // Uses the official Nav3 1.1.x metadata API: metadata { put(NavDisplay.TransitionKey) }.
+                // Push: lightweight fade — the sharedElement (cover) and sharedBounds (title)
+                // already wired in HomeScreen/BookScreen are the visual hero. Running a heavy
+                // slide alongside shared elements causes jank; fade costs almost nothing and
+                // lets the shared elements breathe.
+                // Pop: slide the BookScreen *down* off the screen. Sliding the departing screen
+                // is cheap (it's already composed); the Home screen beneath it never rebuilds.
                 entry<Route.Book>(
                     metadata = ListDetailSceneStrategy.listPane() + metadata {
                         put(NavDisplay.TransitionKey) {
-                            (slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
-                                + fadeIn(tween(160, easing = FastOutSlowInEasing))) togetherWith
-                            (slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { (-it * 0.3f).toInt() }
-                                + fadeOut(tween(160, easing = FastOutSlowInEasing)))
+                            // Fade in: the sharedElement (cover) + sharedBounds (title) are the
+                            // visual hero. A heavy slide alongside them causes dropped frames.
+                            fadeIn(tween(300, easing = FastOutSlowInEasing)) togetherWith
+                                fadeOut(tween(90, easing = LinearEasing))
                         }
                         put(NavDisplay.PopTransitionKey) {
-                            (slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { (-it * 0.3f).toInt() }
-                                + fadeIn(tween(160, easing = FastOutSlowInEasing))) togetherWith
-                            (slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
-                                + fadeOut(tween(160, easing = FastOutSlowInEasing)))
+                            // Slide the BookScreen down on back. Home is already composed
+                            // under it so this costs nothing extra.
+                            fadeIn(tween(200, easing = FastOutSlowInEasing)) togetherWith
+                                (slideOutVertically(tween(350, easing = FastOutSlowInEasing)) { it }
+                                    + fadeOut(tween(150, easing = LinearEasing)))
                         }
                         put(NavDisplay.PredictivePopTransitionKey) { _ ->
-                            (slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { (-it * 0.3f).toInt() }
-                                + fadeIn(tween(160, easing = FastOutSlowInEasing))) togetherWith
-                            (slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
-                                + fadeOut(tween(160, easing = FastOutSlowInEasing)))
+                            fadeIn(tween(200, easing = FastOutSlowInEasing)) togetherWith
+                                (slideOutVertically(tween(350, easing = FastOutSlowInEasing)) { it }
+                                    + fadeOut(tween(150, easing = LinearEasing)))
                         }
                     }
                 ) { key ->
@@ -259,29 +271,26 @@ class ScribeActivity : ComponentActivity() {
                 }
 
                 // ── Editor ───────────────────────────────────────────────────
-                // Slide transition same as Book.
-                // EditorViewModel is provided via CompositionLocal so that
-                // HistoryScreen (a separate entry) can reach it safely without
-                // any back-stack lookup (Bug 6 fix).
+                // Push: fade only. The Editor is the heaviest screen (ScribeEditText +
+                // note content). Composing it while sliding causes dropped frames on notes
+                // with large text — this is what makes it feel like a snap. Fade is nearly
+                // free on the GPU even while composition is in progress.
+                // Pop: slide the Editor screen out to the right. BookScreen beneath it is
+                // already composed, so the slide costs nothing extra and gives a clear
+                // spatial "going back" signal.
                 entry<Route.Editor>(
                     metadata = ListDetailSceneStrategy.detailPane() + metadata {
                         put(NavDisplay.TransitionKey) {
-                            (slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
-                                + fadeIn(tween(160, easing = FastOutSlowInEasing))) togetherWith
-                            (slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { (-it * 0.3f).toInt() }
-                                + fadeOut(tween(160, easing = FastOutSlowInEasing)))
+                            fadeIn(tween(300, easing = FastOutSlowInEasing)) togetherWith
+                                fadeOut(tween(90, easing = LinearEasing))
                         }
                         put(NavDisplay.PopTransitionKey) {
-                            (slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { (-it * 0.3f).toInt() }
-                                + fadeIn(tween(160, easing = FastOutSlowInEasing))) togetherWith
-                            (slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
-                                + fadeOut(tween(160, easing = FastOutSlowInEasing)))
+                            fadeIn(tween(200, easing = FastOutSlowInEasing)) togetherWith
+                                slideOutVertically(tween(350, easing = FastOutSlowInEasing)) { it }
                         }
                         put(NavDisplay.PredictivePopTransitionKey) { _ ->
-                            (slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { (-it * 0.3f).toInt() }
-                                + fadeIn(tween(160, easing = FastOutSlowInEasing))) togetherWith
-                            (slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
-                                + fadeOut(tween(160, easing = FastOutSlowInEasing)))
+                            fadeIn(tween(200, easing = FastOutSlowInEasing)) togetherWith
+                                slideOutVertically(tween(350, easing = FastOutSlowInEasing)) { it }
                         }
                     }
                 ) { key ->
@@ -328,7 +337,27 @@ class ScribeActivity : ComponentActivity() {
                 }
 
                 // ── Settings ─────────────────────────────────────────────────
-                entry<Route.Settings> {
+                // Slide up from bottom — communicates "floating above" rather than
+                // "replacing". These are auxiliary screens, not peer destinations.
+                entry<Route.Settings>(
+                    metadata = metadata {
+                        put(NavDisplay.TransitionKey) {
+                            (slideInVertically(tween(320, easing = FastOutSlowInEasing)) { it }
+                                + fadeIn(tween(200, easing = FastOutSlowInEasing))) togetherWith
+                                fadeOut(tween(100, easing = LinearEasing))
+                        }
+                        put(NavDisplay.PopTransitionKey) {
+                            fadeIn(tween(150, easing = FastOutSlowInEasing)) togetherWith
+                                (slideOutVertically(tween(300, easing = FastOutSlowInEasing)) { it }
+                                    + fadeOut(tween(200, easing = LinearEasing)))
+                        }
+                        put(NavDisplay.PredictivePopTransitionKey) { _ ->
+                            fadeIn(tween(150, easing = FastOutSlowInEasing)) togetherWith
+                                (slideOutVertically(tween(300, easing = FastOutSlowInEasing)) { it }
+                                    + fadeOut(tween(200, easing = LinearEasing)))
+                        }
+                    }
+                ) {
                     SettingsScreen(
                         onBack       = { backStack.removeLastOrNull() },
                         onOpenThemes = {
@@ -370,7 +399,26 @@ class ScribeActivity : ComponentActivity() {
                 }
 
                 // ── Sheets ────────────────────────────────────────────────────
-                entry<Route.Sheets> { key ->
+                // Slide up — auxiliary screen floating above the current context.
+                entry<Route.Sheets>(
+                    metadata = metadata {
+                        put(NavDisplay.TransitionKey) {
+                            (slideInVertically(tween(320, easing = FastOutSlowInEasing)) { it }
+                                + fadeIn(tween(200, easing = FastOutSlowInEasing))) togetherWith
+                                fadeOut(tween(100, easing = LinearEasing))
+                        }
+                        put(NavDisplay.PopTransitionKey) {
+                            fadeIn(tween(150, easing = FastOutSlowInEasing)) togetherWith
+                                (slideOutVertically(tween(300, easing = FastOutSlowInEasing)) { it }
+                                    + fadeOut(tween(200, easing = LinearEasing)))
+                        }
+                        put(NavDisplay.PredictivePopTransitionKey) { _ ->
+                            fadeIn(tween(150, easing = FastOutSlowInEasing)) togetherWith
+                                (slideOutVertically(tween(300, easing = FastOutSlowInEasing)) { it }
+                                    + fadeOut(tween(200, easing = LinearEasing)))
+                        }
+                    }
+                ) { key ->
                     val sheetsVm = viewModel<com.primaloptima.scribe.viewmodel.SheetsViewModel>()
                     SheetsScreen(
                         vm                 = sheetsVm,
@@ -385,7 +433,26 @@ class ScribeActivity : ComponentActivity() {
                 // scopes), so we capture the ViewModel at the ScribeNavigation level instead.
                 // If History is reached without an active Editor (e.g. unusual process
                 // restoration), we pop back rather than crashing.
-                entry<Route.History> {
+                // Slide up — auxiliary screen floating above the editor.
+                entry<Route.History>(
+                    metadata = metadata {
+                        put(NavDisplay.TransitionKey) {
+                            (slideInVertically(tween(320, easing = FastOutSlowInEasing)) { it }
+                                + fadeIn(tween(200, easing = FastOutSlowInEasing))) togetherWith
+                                fadeOut(tween(100, easing = LinearEasing))
+                        }
+                        put(NavDisplay.PopTransitionKey) {
+                            fadeIn(tween(150, easing = FastOutSlowInEasing)) togetherWith
+                                (slideOutVertically(tween(300, easing = FastOutSlowInEasing)) { it }
+                                    + fadeOut(tween(200, easing = LinearEasing)))
+                        }
+                        put(NavDisplay.PredictivePopTransitionKey) { _ ->
+                            fadeIn(tween(150, easing = FastOutSlowInEasing)) togetherWith
+                                (slideOutVertically(tween(300, easing = FastOutSlowInEasing)) { it }
+                                    + fadeOut(tween(200, easing = LinearEasing)))
+                        }
+                    }
+                ) {
                     val editorVm = activeEditorVm
                     if (editorVm == null) {
                         LaunchedEffect(Unit) { backStack.removeLastOrNull() }
@@ -398,12 +465,50 @@ class ScribeActivity : ComponentActivity() {
                 }
 
                 // ── Guide ─────────────────────────────────────────────────────
-                entry<Route.Guide> {
+                // Slide up — auxiliary screen floating above the editor.
+                entry<Route.Guide>(
+                    metadata = metadata {
+                        put(NavDisplay.TransitionKey) {
+                            (slideInVertically(tween(320, easing = FastOutSlowInEasing)) { it }
+                                + fadeIn(tween(200, easing = FastOutSlowInEasing))) togetherWith
+                                fadeOut(tween(100, easing = LinearEasing))
+                        }
+                        put(NavDisplay.PopTransitionKey) {
+                            fadeIn(tween(150, easing = FastOutSlowInEasing)) togetherWith
+                                (slideOutVertically(tween(300, easing = FastOutSlowInEasing)) { it }
+                                    + fadeOut(tween(200, easing = LinearEasing)))
+                        }
+                        put(NavDisplay.PredictivePopTransitionKey) { _ ->
+                            fadeIn(tween(150, easing = FastOutSlowInEasing)) togetherWith
+                                (slideOutVertically(tween(300, easing = FastOutSlowInEasing)) { it }
+                                    + fadeOut(tween(200, easing = LinearEasing)))
+                        }
+                    }
+                ) {
                     GuideScreen(onBack = { backStack.removeLastOrNull() })
                 }
 
                 // ── Shortcuts ──────────────────────────────────────────────────
-                entry<Route.Shortcuts> {
+                // Slide up — auxiliary screen floating above the editor.
+                entry<Route.Shortcuts>(
+                    metadata = metadata {
+                        put(NavDisplay.TransitionKey) {
+                            (slideInVertically(tween(320, easing = FastOutSlowInEasing)) { it }
+                                + fadeIn(tween(200, easing = FastOutSlowInEasing))) togetherWith
+                                fadeOut(tween(100, easing = LinearEasing))
+                        }
+                        put(NavDisplay.PopTransitionKey) {
+                            fadeIn(tween(150, easing = FastOutSlowInEasing)) togetherWith
+                                (slideOutVertically(tween(300, easing = FastOutSlowInEasing)) { it }
+                                    + fadeOut(tween(200, easing = LinearEasing)))
+                        }
+                        put(NavDisplay.PredictivePopTransitionKey) { _ ->
+                            fadeIn(tween(150, easing = FastOutSlowInEasing)) togetherWith
+                                (slideOutVertically(tween(300, easing = FastOutSlowInEasing)) { it }
+                                    + fadeOut(tween(200, easing = LinearEasing)))
+                        }
+                    }
+                ) {
                     ShortcutsScreen(
                         vm     = shortcutsVm,
                         onBack = { backStack.removeLastOrNull() }
