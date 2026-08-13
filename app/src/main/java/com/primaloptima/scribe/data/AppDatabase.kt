@@ -9,9 +9,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 // Phase 2-A: bumped to version 6 (added indexes on book_id and book_id+folder_path)
 // Stats upgrade: bumped to version 7 (added writing_log table)
+// BookScreen header: bumped to version 8 (added summary + tags columns to books)
 @Database(
     entities = [Note::class, Folder::class, WorldEntry::class, Book::class, NoteVersion::class, WritingLog::class],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -158,6 +159,22 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v7 → v8: add `summary` and `tags` columns to books table.
+         * Purely additive — all existing books get empty strings as defaults.
+         * Used by BookScreen header to let authors write a book blurb and genre tags.
+         */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE books ADD COLUMN summary TEXT NOT NULL DEFAULT ''"
+                )
+                database.execSQL(
+                    "ALTER TABLE books ADD COLUMN tags TEXT NOT NULL DEFAULT ''"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val db = Room.databaseBuilder(
@@ -165,7 +182,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "scribe.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                     .addCallback(object : Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             super.onCreate(db)

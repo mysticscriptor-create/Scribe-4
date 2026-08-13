@@ -54,6 +54,10 @@ import com.primaloptima.scribe.util.GrainTexture
 import androidx.compose.ui.platform.LocalView
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
 import dev.chrisbanes.haze.hazeSource
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.navigation3.ui.LocalNavAnimatedContentScope
+import com.primaloptima.scribe.LocalSharedTransitionScope
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -724,7 +728,6 @@ fun HomeScreen(
                         label = "tab-content",
                         modifier = Modifier
                             .fillMaxSize()
-                            .then(if (hazeState != null) Modifier.hazeSource(hazeState) else Modifier)
                     ) { page ->
                         when (page) {
                             0 -> DashboardTabContent(
@@ -1060,6 +1063,7 @@ private fun BooksTabContent(
     }
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun BookGridCard(
     book: Book,
@@ -1071,6 +1075,12 @@ private fun BookGridCard(
     onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
+
+    // Phase 1: shared element transition setup.
+    // sharedTransitionScope is null in @Preview (LocalInspectionMode) — guard accordingly.
+    val sharedTransitionScope = LocalSharedTransitionScope.current
+    val animatedContentScope = if (LocalInspectionMode.current) null
+                               else LocalNavAnimatedContentScope.current
 
     Column(
         modifier = Modifier
@@ -1086,6 +1096,15 @@ private fun BookGridCard(
         ) {
             if (book.coverUri != null) {
                 val context = LocalContext.current
+                // Phase 1: sharedElement morphs the cover between HomeScreen grid and BookScreen header.
+                val coverModifier = if (sharedTransitionScope != null && animatedContentScope != null) {
+                    with(sharedTransitionScope) {
+                        Modifier.fillMaxSize().sharedElement(
+                            state = rememberSharedContentState(key = "book_cover_${book.id}"),
+                            animatedVisibilityScope = animatedContentScope
+                        )
+                    }
+                } else Modifier.fillMaxSize()
                 AsyncImage(
                     // On API < 31, one-shot blur uses View.draw(softwareCanvas).
                     // Hardware bitmaps (Coil's default) crash that call silently,
@@ -1102,7 +1121,7 @@ private fun BookGridCard(
                     },
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = coverModifier
                 )
             } else {
                 Box(
@@ -1143,6 +1162,17 @@ private fun BookGridCard(
 
         Spacer(modifier = Modifier.height(6.dp))
 
+        // Phase 1: sharedBounds (not sharedElement) because the text style changes
+        // between the small grid label here and the large header in BookScreen.
+        val titleModifier = if (sharedTransitionScope != null && animatedContentScope != null) {
+            with(sharedTransitionScope) {
+                Modifier.fillMaxWidth().padding(horizontal = 2.dp).sharedBounds(
+                    sharedContentState = rememberSharedContentState(key = "book_title_${book.id}"),
+                    animatedVisibilityScope = animatedContentScope
+                )
+            }
+        } else Modifier.fillMaxWidth().padding(horizontal = 2.dp)
+
         Text(
             text = book.title,
             fontSize = 13.sp,
@@ -1151,7 +1181,7 @@ private fun BookGridCard(
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
+            modifier = titleModifier
         )
 
         Spacer(modifier = Modifier.height(2.dp))

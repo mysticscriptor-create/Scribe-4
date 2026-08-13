@@ -40,6 +40,12 @@ interface BookDao {
     @Query("UPDATE books SET sort_order = :order WHERE id = :id")
     suspend fun updateSortOrder(id: String, order: Int)
 
+    @Query("UPDATE books SET summary = :summary, updated_at = :updatedAt WHERE id = :id")
+    suspend fun updateSummary(id: String, summary: String, updatedAt: Long)
+
+    @Query("UPDATE books SET tags = :tags, updated_at = :updatedAt WHERE id = :id")
+    suspend fun updateTags(id: String, tags: String, updatedAt: Long)
+
     @Query("SELECT COUNT(*) FROM notes WHERE book_id = :bookId AND external_uri IS NULL")
     suspend fun localNoteCount(bookId: String): Int
 }

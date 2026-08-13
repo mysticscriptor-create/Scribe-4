@@ -330,7 +330,6 @@ fun MainEditorScreen(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
-                    .then(if (editorHazeState != null) Modifier.hazeSource(editorHazeState) else Modifier)
                     .then(
                         if (bgMode == "blurred" && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S && blurIntensity > 0f) {
                             Modifier.graphicsLayer {

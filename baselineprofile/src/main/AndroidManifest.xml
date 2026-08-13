@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Fix 4: Manifest for the :baselineprofile Macrobenchmark test module.
+    The targetPackage points to the app being benchmarked.
+    No activities are declared here — the module only contains test classes.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-sdk android:minSdkVersion="28" />
+    <instrumentation
+        android:name="androidx.test.runner.AndroidJUnitRunner"
+        android:targetPackage="com.primaloptima.scribe"
+        android:label="Scribe Baseline Profile Generator" />
+</manifest>

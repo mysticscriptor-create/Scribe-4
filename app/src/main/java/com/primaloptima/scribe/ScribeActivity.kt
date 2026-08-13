@@ -7,6 +7,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -14,6 +17,9 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
+import androidx.navigation3.adaptive.layout.ListDetailSceneStrategy
+import androidx.navigation3.adaptive.layout.rememberListDetailSceneStrategy
+import androidx.navigation3.ui.DialogSceneStrategy
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
@@ -58,6 +64,12 @@ import kotlinx.coroutines.runBlocking
 // scoped to the Editor entry, without a fragile getBackStackEntry() call
 // (Bug 6 fix — eliminates the IllegalArgumentException crash).
 val LocalEditorViewModel = compositionLocalOf<EditorViewModel?> { null }
+
+// Phase 1: exposes the SharedTransitionLayout scope to any composable that needs
+// sharedElement/sharedBounds without threading it through every call site.
+// Null outside the SharedTransitionLayout (e.g. in @Preview composables).
+@OptIn(ExperimentalSharedTransitionApi::class)
+val LocalSharedTransitionScope = compositionLocalOf<SharedTransitionScope?> { null }
 
 // CompositionLocal to share one ThemeViewModel between ThemeList and ThemeEdit,
 // replacing the Nav2 sub-graph / getBackStackEntry(Route.ThemeFlow) pattern.
@@ -116,6 +128,7 @@ class ScribeActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(ExperimentalSharedTransitionApi::class)
     @Composable
     private fun ScribeNavigation() {
         val backStack = rememberNavBackStack(Route.Home)
@@ -126,9 +139,30 @@ class ScribeActivity : ComponentActivity() {
         // composition scopes), so we hoist the reference here instead.
         var activeEditorVm by remember { mutableStateOf<EditorViewModel?>(null) }
 
+        // Phase 3: two-pane strategy for tablets/foldables. On phones it is a no-op.
+        val listDetailStrategy = rememberListDetailSceneStrategy<Route>()
+
+        // Phase 2: hazeSource centralised here so screens don't need it individually.
+        val hazeState = com.primaloptima.scribe.ui.theme.LocalHazeState.current
+
+        SharedTransitionLayout {
+        CompositionLocalProvider(LocalSharedTransitionScope provides this) {
         NavDisplay(
             backStack = backStack,
             onBack    = { backStack.removeLastOrNull() },
+            // Phase 1: enables sharedElement/sharedBounds across entries.
+            sharedTransitionScope = this,
+            // Phase 2: DialogSceneStrategy enables future nav-level dialog routes.
+            // FrostedDialog stays hand-rolled (separate window breaks Haze pipeline).
+            // Phase 3: listDetailStrategy = two-pane on tablets, no-op on phones.
+            sceneStrategies = remember(listDetailStrategy) {
+                listOf(DialogSceneStrategy(), listDetailStrategy)
+            },
+            sceneDecoratorStrategies = remember(hazeState) {
+                if (hazeState != null)
+                    listOf(com.primaloptima.scribe.navigation.HazeSourceDecoratorStrategy<Route>(hazeState))
+                else emptyList()
+            },
             entryDecorators = listOf(
                 // Must be first: wraps each entry in a SaveableStateProvider so that
                 // rememberSaveable (e.g. loadedNoteId in MainEditorScreen) survives
@@ -194,6 +228,9 @@ class ScribeActivity : ComponentActivity() {
                         put(NavDisplay.PopTransitionKey) {
                             slideInHorizontally { -it } togetherWith slideOutHorizontally { it }
                         }
+                        // Phase 3: on tablets/foldables this entry occupies the list pane.
+                        // On phones ListDetailSceneStrategy ignores this and shows full-screen.
+                        put(ListDetailSceneStrategy.listPaneKey) { }
                     }
                 ) { key ->
                     val bookVm: BookViewModel = viewModel()
@@ -221,6 +258,8 @@ class ScribeActivity : ComponentActivity() {
                         put(NavDisplay.PopTransitionKey) {
                             slideInHorizontally { -it } togetherWith slideOutHorizontally { it }
                         }
+                        // Phase 3: on tablets/foldables this entry occupies the detail pane.
+                        put(ListDetailSceneStrategy.detailPaneKey) { }
                     }
                 ) { key ->
                     val editorVm:   EditorViewModel   = viewModel()
@@ -353,6 +392,8 @@ class ScribeActivity : ComponentActivity() {
                 // manifest, not via navigation — it stays as-is and needs no entry here.
             }
         )
+        } // end CompositionLocalProvider(LocalSharedTransitionScope)
+        } // end SharedTransitionLayout
     }
 
     // Deep links: Scribe currently declares no URL scheme deep links in

@@ -165,6 +165,20 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun saveSummary(summary: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            db.bookDao().updateSummary(bookId, summary, System.currentTimeMillis())
+            withContext(Dispatchers.Main) { reload() }
+        }
+    }
+
+    fun saveTags(tags: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            db.bookDao().updateTags(bookId, tags, System.currentTimeMillis())
+            withContext(Dispatchers.Main) { reload() }
+        }
+    }
+
     fun duplicateNote(noteId: String, onCreated: (String) -> Unit = {}) {
         viewModelScope.launch(Dispatchers.IO) {
             val original = db.noteDao().getById(noteId) ?: return@launch
