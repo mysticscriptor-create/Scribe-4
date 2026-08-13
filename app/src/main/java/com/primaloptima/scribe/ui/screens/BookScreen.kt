@@ -522,6 +522,11 @@ fun BookScreen(
                     } else {
                         // TREE MODE — header + tree in one LazyColumn
                         val treeListState = rememberLazyListState()
+                        // Compute outside LazyColumn so remember() is in a @Composable context.
+                        val rootNotes = remember(notes) { notes.filter { it.folderPath == "/" } }
+                        val folderPaths = remember(folders) {
+                            folders.map { it.path }.filter { it != "/" }.sorted()
+                        }
                         LazyColumn(
                             state           = treeListState,
                             contentPadding  = PaddingValues(bottom = 80.dp),
@@ -540,7 +545,6 @@ fun BookScreen(
                                 }
                             }
                             // Tree items inline
-                            val rootNotes = notes.filter { it.folderPath == "/" }
                             if (rootNotes.isNotEmpty()) {
                                 items(rootNotes, key = { "root_${it.id}" }) { note ->
                                     NoteListRow(
@@ -554,9 +558,6 @@ fun BookScreen(
                                     )
                                     Spacer(modifier = Modifier.height(6.dp))
                                 }
-                            }
-                            val folderPaths = remember(folders) {
-                                folders.map { it.path }.filter { it != "/" }.sorted()
                             }
                             folderPaths.forEach { fPath ->
                                 item(key = "folder_header_$fPath") {
@@ -796,7 +797,7 @@ private fun BookInfoHeader(
                     val coverModifier = if (sharedTransitionScope != null && animatedContentScope != null) {
                         with(sharedTransitionScope) {
                             Modifier.fillMaxSize().sharedElement(
-                                state                   = rememberSharedContentState(key = "book_cover_${book.id}"),
+                                sharedContentState      = rememberSharedContentState(key = "book_cover_${book.id}"),
                                 animatedVisibilityScope = animatedContentScope
                             )
                         }
@@ -1053,7 +1054,7 @@ private fun NoteListRowStateless(
     }
     ScribeStripCard(
         title           = note.name,
-        modifier        = Modifier.fillMaxWidth().padding(horizontal = 12.dp, start = 36.dp),
+        modifier        = Modifier.fillMaxWidth().padding(start = 36.dp, end = 12.dp),
         subtitle        = "${note.wordCount} words · ${note.folderPath}",
         preview         = previewText ?: "No text content",
         previewMaxLines = 2,
