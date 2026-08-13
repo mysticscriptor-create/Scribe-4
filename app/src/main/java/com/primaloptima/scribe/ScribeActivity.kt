@@ -17,8 +17,9 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
-import androidx.navigation3.adaptive.layout.ListDetailSceneStrategy
-import androidx.navigation3.adaptive.layout.rememberListDetailSceneStrategy
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.navigation3.ListDetailSceneStrategy
+import androidx.compose.material3.adaptive.navigation3.rememberListDetailSceneStrategy
 import androidx.navigation3.ui.DialogSceneStrategy
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -128,7 +129,7 @@ class ScribeActivity : ComponentActivity() {
         }
     }
 
-    @OptIn(ExperimentalSharedTransitionApi::class)
+    @OptIn(ExperimentalSharedTransitionApi::class, ExperimentalMaterial3AdaptiveApi::class)
     @Composable
     private fun ScribeNavigation() {
         val backStack = rememberNavBackStack(Route.Home)
@@ -160,7 +161,7 @@ class ScribeActivity : ComponentActivity() {
             },
             sceneDecoratorStrategies = remember(hazeState) {
                 if (hazeState != null)
-                    listOf(com.primaloptima.scribe.navigation.HazeSourceDecoratorStrategy<Route>(hazeState))
+                    listOf(com.primaloptima.scribe.navigation.HazeSourceDecoratorStrategy<NavKey>(hazeState))
                 else emptyList()
             },
             entryDecorators = listOf(
@@ -221,16 +222,13 @@ class ScribeActivity : ComponentActivity() {
                 // Slide transition overrides the NavDisplay default fade.
                 // Uses the official Nav3 1.1.x metadata API: metadata { put(NavDisplay.TransitionKey) }.
                 entry<Route.Book>(
-                    metadata = metadata {
+                    metadata = ListDetailSceneStrategy.listPane() + metadata {
                         put(NavDisplay.TransitionKey) {
                             slideInHorizontally { it } togetherWith slideOutHorizontally { -it }
                         }
                         put(NavDisplay.PopTransitionKey) {
                             slideInHorizontally { -it } togetherWith slideOutHorizontally { it }
                         }
-                        // Phase 3: on tablets/foldables this entry occupies the list pane.
-                        // On phones ListDetailSceneStrategy ignores this and shows full-screen.
-                        put(ListDetailSceneStrategy.listPaneKey) { }
                     }
                 ) { key ->
                     val bookVm: BookViewModel = viewModel()
@@ -251,15 +249,13 @@ class ScribeActivity : ComponentActivity() {
                 // HistoryScreen (a separate entry) can reach it safely without
                 // any back-stack lookup (Bug 6 fix).
                 entry<Route.Editor>(
-                    metadata = metadata {
+                    metadata = ListDetailSceneStrategy.detailPane() + metadata {
                         put(NavDisplay.TransitionKey) {
                             slideInHorizontally { it } togetherWith slideOutHorizontally { -it }
                         }
                         put(NavDisplay.PopTransitionKey) {
                             slideInHorizontally { -it } togetherWith slideOutHorizontally { it }
                         }
-                        // Phase 3: on tablets/foldables this entry occupies the detail pane.
-                        put(ListDetailSceneStrategy.detailPaneKey) { }
                     }
                 ) { key ->
                     val editorVm:   EditorViewModel   = viewModel()
