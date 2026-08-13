@@ -166,7 +166,7 @@ fun HomeScreen(
     }
 
     LaunchedEffect(Unit) {
-        shellVm.selectTab(initialPage)
+        shellVm.setInitialTab(initialPage)
     }
     // Collapse speed-dial whenever the user switches tabs
     LaunchedEffect(selectedNavTab) {
