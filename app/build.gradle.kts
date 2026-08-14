@@ -179,6 +179,9 @@ dependencies {
     // implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     // "baselineProfile"(project(":baselineprofile"))
 
+    // Sora Editor — high-performance text editor (replaces BasicTextField/EditText)
+    implementation(libs.sora.editor)
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

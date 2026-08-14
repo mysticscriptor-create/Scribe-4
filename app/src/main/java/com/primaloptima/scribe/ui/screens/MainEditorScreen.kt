@@ -78,7 +78,6 @@ import com.primaloptima.scribe.data.Note
 import com.primaloptima.scribe.data.WorldEntry
 import com.primaloptima.scribe.ui.components.FloatingWindowOverlay
 import com.primaloptima.scribe.util.ExportHelper
-import com.primaloptima.scribe.view.ScribeEditText
 import com.primaloptima.scribe.viewmodel.BookViewModel
 import com.primaloptima.scribe.viewmodel.EditorViewModel
 import com.primaloptima.scribe.viewmodel.NoteListViewModel
@@ -86,16 +85,12 @@ import com.primaloptima.scribe.viewmodel.ShortcutsViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
-import androidx.compose.runtime.snapshotFlow
-// ── BasicTextField experiment imports ─────────────────────────────────────────
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.input.TextFieldState
-import androidx.compose.foundation.text.input.rememberTextFieldState
-import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.graphics.SolidColor
-import com.primaloptima.scribe.ui.util.ScribeInputTransformation
+// ── Sora Editor imports ───────────────────────────────────────────────────────
+import androidx.compose.ui.viewinterop.AndroidView
+import io.github.rosemoe.sora.widget.CodeEditor
+import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
+import io.github.rosemoe.sora.event.ContentChangeEvent
+import io.github.rosemoe.sora.text.Content
 import com.primaloptima.scribe.util.ThemeManager
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -250,15 +245,10 @@ fun MainEditorScreen(
         openDialog()
     }
 
-    // ── BasicTextField experiment ─────────────────────────────────────────────
-    // TextFieldState is the single source of truth for editor content.
-    // It is hoisted here so toolbar buttons and find/replace can read/write it.
-    val textFieldState = rememberTextFieldState()
-
-    // editorRef kept as null — only used by toolbar extension fns.
-    // Those fns are replaced below by textFieldState equivalents.
-    // Set to null explicitly so the compiler doesn't warn about unused var.
-    val editorRef: ScribeEditText? = null
+    // ── Sora Editor state ─────────────────────────────────────────────────────
+    // soraEditorRef holds the live CodeEditor view so toolbar buttons and
+    // find/replace can call into it without recomposition.
+    var soraEditorRef by remember { mutableStateOf<CodeEditor?>(null) }
 
     // Bug 2 fix (preserved): rememberSaveable so loadedNoteId survives
     // recomposition when returning from History.
@@ -304,44 +294,32 @@ fun MainEditorScreen(
         }
     }
 
-    // ── Load note content into TextFieldState ─────────────────────────────────
-    // Mirrors the AndroidView update lambda's loadedNoteId guard:
-    // only load when the note actually changes or the state is empty.
-    LaunchedEffect(activeNote?.id, activeNote?.content) {
+    // ── Load note content into Sora CodeEditor ────────────────────────────────
+    // Mirrors the old AndroidView update lambda's loadedNoteId guard:
+    // only setText when the note actually changes or the editor is empty.
+    // soraEditorRef may be null on first composition (before AndroidView factory
+    // runs), so this also re-fires when soraEditorRef becomes non-null.
+    LaunchedEffect(activeNote?.id, activeNote?.content, soraEditorRef) {
         val note = activeNote ?: return@LaunchedEffect
+        val editor = soraEditorRef ?: return@LaunchedEffect
         if (loadedNoteId != note.id ||
-            (textFieldState.text.isEmpty() && note.content.isNotEmpty())) {
+            (editor.text.length == 0 && note.content.isNotEmpty())) {
             loadedNoteId = note.id
-            // setTextAndPlaceCursorAtEnd replaces content without triggering
-            // the onValueChange observer (it's a programmatic edit, not user input),
-            // so it won't re-fire onContentChanged — matching setContentSilently.
-            textFieldState.setTextAndPlaceCursorAtEnd(note.content)
+            // setText() is a programmatic replacement — it does NOT fire the
+            // ContentChangeEvent subscription, so it won't loop back into
+            // onContentChanged. Sora handles this correctly out of the box.
+            editor.setText(note.content)
         }
     }
 
-    // ── Observe TextFieldState for autosave / stats ───────────────────────────
-    // snapshotFlow emits on every text change caused by user input.
-    // Programmatic edits (setTextAndPlaceCursorAtEnd above) also emit,
-    // but EditorViewModel.onContentChanged is idempotent when content hasn't changed.
-    LaunchedEffect(textFieldState) {
-        snapshotFlow { textFieldState.text.toString() }
-            .collect { text ->
-                // Only fire when a note is actually loaded to avoid spurious
-                // autosave calls during initialisation.
-                if (loadedNoteId != null) {
-                    editorVm.onContentChanged(text)
-                }
-            }
-    }
-
     // Auto-save snapshot when leaving note.
-    // Capture the state reference in a val so onDispose can read it
-    // without capturing the composable scope.
-    val textFieldStateRef = textFieldState
+    // soraEditorRef is captured in a local val so onDispose can read it
+    // safely without holding a reference to the composable scope.
+    val soraEditorForDispose = soraEditorRef
     DisposableEffect(activeNote?.id) {
         onDispose {
             activeNote?.let { _ ->
-                val currentText = textFieldStateRef.text.toString()
+                val currentText = soraEditorForDispose?.text?.toString() ?: ""
                 editorVm.saveVersionSnapshotOnLeave(currentText)
             }
         }
@@ -1073,10 +1051,15 @@ fun MainEditorScreen(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .clickable {
-                                                            val pos = textFieldState.text.indexOf(entry.text)
-                                                            if (pos >= 0) {
-                                                                textFieldState.edit {
-                                                                    selection = androidx.compose.ui.text.TextRange(pos)
+                                                            soraEditorRef?.let { editor ->
+                                                                val fullText = editor.text.toString()
+                                                                val charPos  = fullText.indexOf(entry.text)
+                                                                if (charPos >= 0) {
+                                                                    // Convert flat char offset → line/column for Sora.
+                                                                    val line = editor.text.getLineCount(charPos)
+                                                                    val col  = charPos - editor.text.getLineStart(line)
+                                                                    editor.cursor.set(line, col)
+                                                                    editor.ensurePositionVisible(line, col)
                                                                 }
                                                             }
                                                             scope.launch { rightDrawerState.close() }
@@ -1167,7 +1150,7 @@ fun MainEditorScreen(
                                                     Icon(Icons.Default.Search, contentDescription = "Find")
                                                 }
                                                 IconButton(onClick = {
-                                                    val text = textFieldState.text.toString()
+                                                    val text = soraEditorRef?.text?.toString() ?: ""
                                                     editorVm.saveManualSnapshot(text)
                                                     Toast.makeText(context, "Checkpoint saved", Toast.LENGTH_SHORT).show()
                                                 }) {
@@ -1230,7 +1213,7 @@ fun MainEditorScreen(
                                                             // will be called with note.content read from the DB.
                                                             // Without this flush, anything typed within the 500ms
                                                             // autosave debounce window is silently discarded.
-                                                            editorVm.flushContent(textFieldState.text.toString())
+                                                            editorVm.flushContent(soraEditorRef?.text?.toString() ?: "")
                                                             onOpenHistory()
                                                         }
                                                     )
@@ -1293,20 +1276,20 @@ fun MainEditorScreen(
                                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                            FormatButton(label = "B") { textFieldState.applyFormat("**", "**") }
-                                            FormatButton(label = "I") { textFieldState.applyFormat("*", "*") }
-                                            FormatButton(label = "H1") { textFieldState.applyLinePrefix("# ") }
-                                            FormatButton(label = "H2") { textFieldState.applyLinePrefix("## ") }
-                                            FormatButton(label = "Quote") { textFieldState.applyLinePrefix("> ") }
-                                            FormatButton(label = "List") { textFieldState.applyLinePrefix("- ") }
-                                            FormatButton(label = "Code") { textFieldState.applyFormat("`", "`") }
+                                            FormatButton(label = "B") { soraEditorRef?.applyFormat("**", "**") }
+                                            FormatButton(label = "I") { soraEditorRef?.applyFormat("*", "*") }
+                                            FormatButton(label = "H1") { soraEditorRef?.applyLinePrefix("# ") }
+                                            FormatButton(label = "H2") { soraEditorRef?.applyLinePrefix("## ") }
+                                            FormatButton(label = "Quote") { soraEditorRef?.applyLinePrefix("> ") }
+                                            FormatButton(label = "List") { soraEditorRef?.applyLinePrefix("- ") }
+                                            FormatButton(label = "Code") { soraEditorRef?.applyFormat("`", "`") }
 
                                             shortcuts.forEach { shortcut ->
                                                 FormatButton(label = shortcut.label) {
                                                     when (shortcut.kind) {
-                                                        "wrap" -> textFieldState.applyFormat(shortcut.payload, shortcut.closing ?: shortcut.payload)
-                                                        "pair" -> textFieldState.applyFormat(shortcut.payload, shortcut.closing ?: "")
-                                                        else -> textFieldState.insertAtCursor(shortcut.payload)
+                                                        "wrap" -> soraEditorRef?.applyFormat(shortcut.payload, shortcut.closing ?: shortcut.payload)
+                                                        "pair" -> soraEditorRef?.applyFormat(shortcut.payload, shortcut.closing ?: "")
+                                                        else -> soraEditorRef?.insertAtCursor(shortcut.payload)
                                                     }
                                                 }
                                             }
@@ -1354,20 +1337,24 @@ fun MainEditorScreen(
                                                         .weight(1f)
                                                         .height(48.dp)
                                                 )
+                                                // Previous match
                                                 IconButton(onClick = {
+                                                    soraEditorRef?.searcher?.gotoPreviousResult()
+                                                }) {
+                                                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous match")
+                                                }
+                                                // Next match
+                                                IconButton(onClick = {
+                                                    soraEditorRef?.searcher?.gotoNextResult()
+                                                }) {
+                                                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next match")
+                                                }
+                                                // Replace all
+                                                IconButton(onClick = {
+                                                    val editor = soraEditorRef ?: return@IconButton
                                                     if (findQuery.isNotEmpty()) {
-                                                        // Replace all occurrences directly in TextFieldState.
-                                                        // TextFieldState.edit{} is undoable via its built-in undo stack.
-                                                        val current = textFieldState.text.toString()
-                                                        val replaced = current.replace(
-                                                            findQuery,
-                                                            replaceQuery,
-                                                            ignoreCase = true
-                                                        )
-                                                        if (replaced != current) {
-                                                            textFieldState.setTextAndPlaceCursorAtEnd(replaced)
-                                                            editorVm.onContentChanged(replaced)
-                                                        }
+                                                        editor.searcher.replaceAll(replaceQuery)
+                                                        editorVm.onContentChanged(editor.text.toString())
                                                     }
                                                 }) {
                                                     Icon(Icons.Default.FindReplace, contentDescription = "Replace All")
@@ -1376,6 +1363,24 @@ fun MainEditorScreen(
                                                     Icon(Icons.Default.Close, contentDescription = "Close")
                                                 }
                                             }
+                                        }
+                                    }
+
+                                    // ── Wire find query into Sora searcher ───────────────────
+                                    // Runs whenever findQuery changes or the bar is toggled.
+                                    // When the bar closes we stop the search to clear highlights.
+                                    LaunchedEffect(findQuery, showFindBar) {
+                                        val editor = soraEditorRef ?: return@LaunchedEffect
+                                        if (showFindBar && findQuery.isNotEmpty()) {
+                                            editor.searcher.search(
+                                                findQuery,
+                                                io.github.rosemoe.sora.widget.component.EditorSearcher.SearchOptions(
+                                                    ignoreCase = true,
+                                                    useRegex  = false
+                                                )
+                                            )
+                                        } else {
+                                            editor.searcher.stopSearch()
                                         }
                                     }
 
@@ -1416,38 +1421,70 @@ fun MainEditorScreen(
                                                 }
                                             }
                                     ) {
-                                    // ── BasicTextField (experiment) ───────────────────────────────
-                                    // Replaces AndroidView(ScribeEditText). Content is driven by
-                                    // textFieldState; loading and ViewModel wiring is in the
-                                    // LaunchedEffects above.
-                                    val editorFontSize = (activeTheme?.fontSize ?: 18).sp
-                                    val editorTypeface = activeTheme?.fontFamily?.let { family ->
+                                    // ── Sora CodeEditor ───────────────────────────────────────
+                                    // High-performance View-based editor. Content loading and
+                                    // ViewModel wiring live in the LaunchedEffects above.
+                                    // The factory runs once; the update lambda re-applies
+                                    // theme values whenever they change in Compose state.
+                                    val editorTextSizeSp = (activeTheme?.fontSize ?: 18).toFloat()
+                                    val editorTypeface   = activeTheme?.fontFamily?.let { family ->
                                         ThemeManager.resolveTypeface(context, family)
                                     }
-                                    val editorFontFamily = editorTypeface?.let { tf ->
-                                        FontFamily(androidx.compose.ui.text.font.Typeface(tf))
-                                    } ?: FontFamily.Default
+                                    val bgArgb   = if (hasBgImage) android.graphics.Color.TRANSPARENT
+                                                   else currentThemeBg.toArgb()
+                                    val textArgb = currentThemeTextColor.toArgb()
+                                    val primaryArgb = currentThemePrimary.toArgb()
 
-                                    val editorTextStyle = TextStyle(
-                                        color = currentThemeTextColor,
-                                        fontSize = editorFontSize,
-                                        fontFamily = editorFontFamily,
-                                        lineHeight = editorFontSize * 1.6f
-                                    )
+                                    AndroidView(
+                                        factory = { ctx ->
+                                            CodeEditor(ctx).apply {
+                                                // ── Writer-mode setup ──────────────────────────
+                                                // Disable all code-editor chrome — this is a prose editor.
+                                                isLineNumberEnabled      = false
+                                                isHighlightCurrentLine   = false
+                                                isWordwrap               = true
+                                                // No language = plain text, zero syntax overhead.
+                                                setEditorLanguage(null)
 
-                                    BasicTextField(
-                                        state = textFieldState,
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(
-                                                if (hasBgImage) Color.Transparent
-                                                else currentThemeBg
-                                            )
-                                            .padding(horizontal = 20.dp, vertical = 20.dp),
-                                        textStyle = editorTextStyle,
-                                        inputTransformation = ScribeInputTransformation,
-                                        cursorBrush = SolidColor(currentThemePrimary),
-                                        scrollState = rememberScrollState()
+                                                // ── Content change → ViewModel ─────────────────
+                                                // subscribeEvent fires on every user edit.
+                                                // Programmatic setText() does NOT fire this.
+                                                subscribeEvent(ContentChangeEvent::class.java) { _, _ ->
+                                                    if (loadedNoteId != null) {
+                                                        editorVm.onContentChanged(text.toString())
+                                                    }
+                                                }
+                                            }.also { soraEditorRef = it }
+                                        },
+                                        update = { editor ->
+                                            // ── Apply theme ────────────────────────────────────
+                                            editor.setTextSize(editorTextSizeSp)
+                                            editorTypeface?.let { editor.typefaceText = it }
+
+                                            // Background — transparent when a bg image is active.
+                                            editor.setBackgroundColor(bgArgb)
+
+                                            // Color scheme: override just the tokens we care about.
+                                            editor.colorScheme.apply {
+                                                setColor(EditorColorScheme.WHOLE_BACKGROUND, bgArgb)
+                                                setColor(EditorColorScheme.TEXT_NORMAL,      textArgb)
+                                                setColor(EditorColorScheme.SELECTION_HANDLE, primaryArgb)
+                                                setColor(EditorColorScheme.SELECTION_BACKGROUND,
+                                                    android.graphics.Color.argb(
+                                                        80,
+                                                        android.graphics.Color.red(primaryArgb),
+                                                        android.graphics.Color.green(primaryArgb),
+                                                        android.graphics.Color.blue(primaryArgb)
+                                                    )
+                                                )
+                                                // Hide the gutter background entirely.
+                                                setColor(EditorColorScheme.LINE_NUMBER_BACKGROUND, bgArgb)
+                                                setColor(EditorColorScheme.LINE_NUMBER,            bgArgb)
+                                            }
+                                            // Notify Sora the scheme changed so it redraws.
+                                            editor.colorScheme = editor.colorScheme
+                                        },
+                                        modifier = Modifier.fillMaxSize()
                                     )
                                     } // end gesture-detection Box
 
@@ -1767,42 +1804,41 @@ private fun FormatButton(
     }
 }
 
-// ── TextFieldState toolbar helpers ────────────────────────────────────────────
-// Replacements for the old ScribeEditText extension functions.
-// TextFieldState.edit{} is automatically recorded in the built-in undo stack.
+// ── CodeEditor toolbar helpers ────────────────────────────────────────────────
+// These call into Sora's cursor/text API, which records every edit in Sora's
+// built-in UndoManager so undo/redo works correctly.
 
-private fun TextFieldState.applyFormat(prefix: String, suffix: String) {
-    edit {
-        val start = selection.start
-        val end   = selection.end
-        if (start >= 0 && end >= start) {
-            val selected  = toString().substring(start, end)
-            val formatted = "$prefix$selected$suffix"
-            replace(start, end, formatted)
-            selection = androidx.compose.ui.text.TextRange(
-                start + prefix.length,
-                start + prefix.length + selected.length
-            )
-        }
+private fun CodeEditor.applyFormat(prefix: String, suffix: String) {
+    val cursor = cursor
+    if (cursor.isSelected) {
+        // Wrap the selected text with prefix + suffix.
+        val selected = text.subSequence(
+            cursor.left,
+            cursor.right
+        ).toString()
+        commitText("$prefix$selected$suffix")
+    } else {
+        // No selection — insert pair and place cursor between them.
+        commitText("$prefix$suffix")
+        // Move cursor back by suffix length so it sits inside the pair.
+        val line = cursor.leftLine
+        val col  = cursor.leftColumn - suffix.length
+        this.cursor.set(line, col.coerceAtLeast(0))
     }
 }
 
-private fun TextFieldState.applyLinePrefix(prefix: String) {
-    edit {
-        val pos = selection.start
-        if (pos >= 0) {
-            replace(pos, pos, prefix)
-        }
-    }
+private fun CodeEditor.applyLinePrefix(prefix: String) {
+    // Insert prefix at the start of the current line.
+    val line      = cursor.leftLine
+    val lineStart = text.getLineStart(line)
+    text.insert(line, 0, prefix)
+    // Keep cursor at the same visual position, shifted right by prefix length.
+    val newCol = cursor.leftColumn + prefix.length
+    cursor.set(line, newCol)
 }
 
-private fun TextFieldState.insertAtCursor(str: String) {
-    edit {
-        val pos = selection.start
-        if (pos >= 0) {
-            replace(pos, pos, str)
-        }
-    }
+private fun CodeEditor.insertAtCursor(str: String) {
+    commitText(str)
 }
 
 private fun parseComposeColor(hex: String, fallback: Color = Color.Transparent): Color {
