@@ -18,8 +18,10 @@ import com.primaloptima.scribe.util.model.AppTheme
  *  - Current-line highlight (subtle, ~7% opacity of text colour)
  *  - Selection background + handles + insert cursor line
  *  - Matched-bracket highlight
- *  - Search result highlight
  *  - Scroll bar thumb/track
+ *
+ * Note: SEARCH_RESULT_BACKGROUND is not a valid constant in Sora 0.24.x —
+ * search highlight colours are managed internally by the editor.
  *
  * Removed: TEXT_SELECTED — not a valid EditorColorScheme constant in Sora 0.24.x;
  * Sora reuses TEXT_NORMAL for selected-text rendering automatically.
@@ -58,9 +60,6 @@ class ScribeColorScheme(theme: AppTheme) : EditorColorScheme() {
         setColor(HIGHLIGHTED_DELIMITERS_BACKGROUND, withAlpha(accent, 60))
         // HIGHLIGHTED_DELIMITERS_UNDERLINE may not exist in all 0.24.x builds —
         // omitted to avoid a silent no-op or runtime crash on older patch versions.
-
-        // ── Search highlights ─────────────────────────────────────────────────
-        setColor(SEARCH_RESULT_BACKGROUND, withAlpha(accent, 80))
 
         // ── Scroll indicators (keep neutral) ──────────────────────────────────
         setColor(SCROLL_BAR_THUMB,         withAlpha(text, 60))
