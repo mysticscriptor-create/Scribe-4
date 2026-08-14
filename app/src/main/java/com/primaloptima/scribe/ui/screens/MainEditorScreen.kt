@@ -59,10 +59,8 @@ import dev.chrisbanes.haze.hazeSource
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.SpanStyle
@@ -96,7 +94,7 @@ import io.github.rosemoe.sora.text.Content
 import com.primaloptima.scribe.util.ScribeProseLanguage
 import com.primaloptima.scribe.util.ThemeManager
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun MainEditorScreen(
     editorVm: EditorViewModel,
@@ -385,6 +383,7 @@ fun MainEditorScreen(
             )
         }
 
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
         ModalNavigationDrawer(
             drawerState = leftDrawerState,
             gesturesEnabled = true,
@@ -1480,14 +1479,7 @@ fun MainEditorScreen(
                                             // Notify Sora the scheme changed so it redraws.
                                             editor.colorScheme = editor.colorScheme
                                         },
-                                        // pointerInteropFilter: pass every MotionEvent straight to
-                                        // Sora's View layer and return false so Compose still sees
-                                        // the event. Without this, Compose re-evaluates each touch
-                                        // frame and stops dispatching to the View mid-scroll —
-                                        // causing the "scroll stops after an inch" symptom.
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .pointerInteropFilter { false }
+                                        modifier = Modifier.fillMaxSize()
                                     )
                                     } // end gesture-detection Box
 
@@ -1677,6 +1669,7 @@ fun MainEditorScreen(
         } // end CompositionLocalProvider(LocalOneShotBitmap provides dialogOneShotBitmap)
     }
         } // end ModalNavigationDrawer
+    } // end CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr)
     } // end outer Box
 }
 
