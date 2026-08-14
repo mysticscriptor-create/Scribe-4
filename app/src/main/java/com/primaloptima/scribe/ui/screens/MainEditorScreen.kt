@@ -382,6 +382,7 @@ fun MainEditorScreen(
                     val absX = kotlin.math.abs(totalX)
                     val absY = kotlin.math.abs(totalY)
                     if (absX > threshold && absX > absY * 1.5f) {
+                        // ── Open ──────────────────────────────────────────────
                         if (totalX > 0 && leftDrawerState.isClosed
                                 && !leftDrawerState.isAnimationRunning
                                 && startX < size.width * 0.3f) {
@@ -394,6 +395,21 @@ fun MainEditorScreen(
                             drag.consume()
                             triggered = true
                             scope.launch { rightDrawerState.open() }
+                        // ── Close ─────────────────────────────────────────────
+                        // Swipe left (totalX < 0) closes the left drawer.
+                        // Swipe right (totalX > 0) closes the right drawer.
+                        // No edge restriction — the whole screen is valid when
+                        // a drawer is already open.
+                        } else if (totalX < 0 && !leftDrawerState.isClosed
+                                && !leftDrawerState.isAnimationRunning) {
+                            drag.consume()
+                            triggered = true
+                            scope.launch { leftDrawerState.close() }
+                        } else if (totalX > 0 && !rightDrawerState.isClosed
+                                && !rightDrawerState.isAnimationRunning) {
+                            drag.consume()
+                            triggered = true
+                            scope.launch { rightDrawerState.close() }
                         }
                     }
                 }
