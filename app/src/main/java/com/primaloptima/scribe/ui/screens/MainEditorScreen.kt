@@ -88,6 +88,7 @@ import kotlin.math.roundToInt
 // ── Sora Editor imports ───────────────────────────────────────────────────────
 import androidx.compose.ui.viewinterop.AndroidView
 import io.github.rosemoe.sora.widget.CodeEditor
+import io.github.rosemoe.sora.widget.component.EditorSearcher
 import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
 import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.text.Content
@@ -1056,8 +1057,8 @@ fun MainEditorScreen(
                                                                 val charPos  = fullText.indexOf(entry.text)
                                                                 if (charPos >= 0) {
                                                                     // Convert flat char offset → line/column for Sora.
-                                                                    val line = editor.text.getLineCount(charPos)
-                                                                    val col  = charPos - editor.text.getLineStart(line)
+                                                                    val line = editor.text.indexer.getCharLine(charPos)
+                                                                    val col  = editor.text.indexer.getCharColumn(charPos)
                                                                     editor.cursor.set(line, col)
                                                                     editor.ensurePositionVisible(line, col)
                                                                 }
@@ -1339,13 +1340,13 @@ fun MainEditorScreen(
                                                 )
                                                 // Previous match
                                                 IconButton(onClick = {
-                                                    soraEditorRef?.searcher?.gotoPreviousResult()
+                                                    soraEditorRef?.searcher?.gotoPrevious()
                                                 }) {
                                                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous match")
                                                 }
                                                 // Next match
                                                 IconButton(onClick = {
-                                                    soraEditorRef?.searcher?.gotoNextResult()
+                                                    soraEditorRef?.searcher?.gotoNext()
                                                 }) {
                                                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next match")
                                                 }
@@ -1374,7 +1375,7 @@ fun MainEditorScreen(
                                         if (showFindBar && findQuery.isNotEmpty()) {
                                             editor.searcher.search(
                                                 findQuery,
-                                                io.github.rosemoe.sora.widget.component.EditorSearcher.SearchOptions(
+                                                EditorSearcher.SearchOptions(
                                                     ignoreCase = true,
                                                     useRegex  = false
                                                 )
@@ -1469,7 +1470,7 @@ fun MainEditorScreen(
                                                 setColor(EditorColorScheme.WHOLE_BACKGROUND, bgArgb)
                                                 setColor(EditorColorScheme.TEXT_NORMAL,      textArgb)
                                                 setColor(EditorColorScheme.SELECTION_HANDLE, primaryArgb)
-                                                setColor(EditorColorScheme.SELECTION_BACKGROUND,
+                                                setColor(EditorColorScheme.SELECTED_TEXT_BACKGROUND,
                                                     android.graphics.Color.argb(
                                                         80,
                                                         android.graphics.Color.red(primaryArgb),
