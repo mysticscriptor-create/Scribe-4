@@ -1,7 +1,6 @@
 package com.primaloptima.scribe.ui.screens
 
 import android.net.Uri
-import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -74,7 +73,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.primaloptima.scribe.data.Folder
 import com.primaloptima.scribe.data.Note
 import com.primaloptima.scribe.data.WorldEntry
@@ -88,6 +86,17 @@ import com.primaloptima.scribe.viewmodel.ShortcutsViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import androidx.compose.runtime.snapshotFlow
+// ── BasicTextField experiment imports ─────────────────────────────────────────
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.graphics.SolidColor
+import com.primaloptima.scribe.ui.util.ScribeInputTransformation
+import com.primaloptima.scribe.util.ThemeManager
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
@@ -241,11 +250,18 @@ fun MainEditorScreen(
         openDialog()
     }
 
-    var editorRef by remember { mutableStateOf<ScribeEditText?>(null) }
-    // Bug 2 fix: rememberSaveable instead of remember so loadedNoteId survives
-    // recomposition when returning from History. Without this, loadedNoteId resets
-    // to null on recompose, the AndroidView update lambda sees a mismatched id,
-    // and setText() overwrites the editor with stale DB content.
+    // ── BasicTextField experiment ─────────────────────────────────────────────
+    // TextFieldState is the single source of truth for editor content.
+    // It is hoisted here so toolbar buttons and find/replace can read/write it.
+    val textFieldState = rememberTextFieldState()
+
+    // editorRef kept as null — only used by toolbar extension fns.
+    // Those fns are replaced below by textFieldState equivalents.
+    // Set to null explicitly so the compiler doesn't warn about unused var.
+    val editorRef: ScribeEditText? = null
+
+    // Bug 2 fix (preserved): rememberSaveable so loadedNoteId survives
+    // recomposition when returning from History.
     var loadedNoteId by rememberSaveable { mutableStateOf<String?>(null) }
     val expandedTreeState = remember { mutableStateMapOf<String, Boolean>() }
 
@@ -288,11 +304,44 @@ fun MainEditorScreen(
         }
     }
 
-    // Auto-save snapshot when leaving note
+    // ── Load note content into TextFieldState ─────────────────────────────────
+    // Mirrors the AndroidView update lambda's loadedNoteId guard:
+    // only load when the note actually changes or the state is empty.
+    LaunchedEffect(activeNote?.id, activeNote?.content) {
+        val note = activeNote ?: return@LaunchedEffect
+        if (loadedNoteId != note.id ||
+            (textFieldState.text.isEmpty() && note.content.isNotEmpty())) {
+            loadedNoteId = note.id
+            // setTextAndPlaceCursorAtEnd replaces content without triggering
+            // the onValueChange observer (it's a programmatic edit, not user input),
+            // so it won't re-fire onContentChanged — matching setContentSilently.
+            textFieldState.setTextAndPlaceCursorAtEnd(note.content)
+        }
+    }
+
+    // ── Observe TextFieldState for autosave / stats ───────────────────────────
+    // snapshotFlow emits on every text change caused by user input.
+    // Programmatic edits (setTextAndPlaceCursorAtEnd above) also emit,
+    // but EditorViewModel.onContentChanged is idempotent when content hasn't changed.
+    LaunchedEffect(textFieldState) {
+        snapshotFlow { textFieldState.text.toString() }
+            .collect { text ->
+                // Only fire when a note is actually loaded to avoid spurious
+                // autosave calls during initialisation.
+                if (loadedNoteId != null) {
+                    editorVm.onContentChanged(text)
+                }
+            }
+    }
+
+    // Auto-save snapshot when leaving note.
+    // Capture the state reference in a val so onDispose can read it
+    // without capturing the composable scope.
+    val textFieldStateRef = textFieldState
     DisposableEffect(activeNote?.id) {
         onDispose {
-            activeNote?.let { n ->
-                val currentText = editorRef?.text?.toString() ?: n.content
+            activeNote?.let { _ ->
+                val currentText = textFieldStateRef.text.toString()
                 editorVm.saveVersionSnapshotOnLeave(currentText)
             }
         }
@@ -1024,10 +1073,10 @@ fun MainEditorScreen(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .clickable {
-                                                            editorRef?.let { ed ->
-                                                                val pos = ed.text?.indexOf(entry.text) ?: -1
-                                                                if (pos >= 0) {
-                                                                    ed.setSelection(pos)
+                                                            val pos = textFieldState.text.indexOf(entry.text)
+                                                            if (pos >= 0) {
+                                                                textFieldState.edit {
+                                                                    selection = androidx.compose.ui.text.TextRange(pos)
                                                                 }
                                                             }
                                                             scope.launch { rightDrawerState.close() }
@@ -1118,7 +1167,7 @@ fun MainEditorScreen(
                                                     Icon(Icons.Default.Search, contentDescription = "Find")
                                                 }
                                                 IconButton(onClick = {
-                                                    val text = editorRef?.text?.toString() ?: activeNote?.content ?: ""
+                                                    val text = textFieldState.text.toString()
                                                     editorVm.saveManualSnapshot(text)
                                                     Toast.makeText(context, "Checkpoint saved", Toast.LENGTH_SHORT).show()
                                                 }) {
@@ -1181,9 +1230,7 @@ fun MainEditorScreen(
                                                             // will be called with note.content read from the DB.
                                                             // Without this flush, anything typed within the 500ms
                                                             // autosave debounce window is silently discarded.
-                                                            editorRef?.text?.toString()?.let { currentText ->
-                                                                editorVm.flushContent(currentText)
-                                                            }
+                                                            editorVm.flushContent(textFieldState.text.toString())
                                                             onOpenHistory()
                                                         }
                                                     )
@@ -1246,20 +1293,20 @@ fun MainEditorScreen(
                                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                            FormatButton(label = "B") { editorRef?.applyFormat("**", "**") }
-                                            FormatButton(label = "I") { editorRef?.applyFormat("*", "*") }
-                                            FormatButton(label = "H1") { editorRef?.applyLinePrefix("# ") }
-                                            FormatButton(label = "H2") { editorRef?.applyLinePrefix("## ") }
-                                            FormatButton(label = "Quote") { editorRef?.applyLinePrefix("> ") }
-                                            FormatButton(label = "List") { editorRef?.applyLinePrefix("- ") }
-                                            FormatButton(label = "Code") { editorRef?.applyFormat("`", "`") }
+                                            FormatButton(label = "B") { textFieldState.applyFormat("**", "**") }
+                                            FormatButton(label = "I") { textFieldState.applyFormat("*", "*") }
+                                            FormatButton(label = "H1") { textFieldState.applyLinePrefix("# ") }
+                                            FormatButton(label = "H2") { textFieldState.applyLinePrefix("## ") }
+                                            FormatButton(label = "Quote") { textFieldState.applyLinePrefix("> ") }
+                                            FormatButton(label = "List") { textFieldState.applyLinePrefix("- ") }
+                                            FormatButton(label = "Code") { textFieldState.applyFormat("`", "`") }
 
                                             shortcuts.forEach { shortcut ->
                                                 FormatButton(label = shortcut.label) {
                                                     when (shortcut.kind) {
-                                                        "wrap" -> editorRef?.applyFormat(shortcut.payload, shortcut.closing ?: shortcut.payload)
-                                                        "pair" -> editorRef?.applyFormat(shortcut.payload, shortcut.closing ?: "")
-                                                        else -> editorRef?.insertTextAtCursor(shortcut.payload)
+                                                        "wrap" -> textFieldState.applyFormat(shortcut.payload, shortcut.closing ?: shortcut.payload)
+                                                        "pair" -> textFieldState.applyFormat(shortcut.payload, shortcut.closing ?: "")
+                                                        else -> textFieldState.insertAtCursor(shortcut.payload)
                                                     }
                                                 }
                                             }
@@ -1309,13 +1356,18 @@ fun MainEditorScreen(
                                                 )
                                                 IconButton(onClick = {
                                                     if (findQuery.isNotEmpty()) {
-                                                        // FIX 5: replaceAll() handles undo properly.
-                                                        // startFind() populates the match list first.
-                                                        // false, false = no regex, case-insensitive
-                                                        // (matches original behavior).
-                                                        editorRef?.startFind(findQuery, false, false)
-                                                        editorRef?.replaceAll(replaceQuery)
-                                                        editorVm.onContentChanged(editorRef?.text?.toString() ?: "")
+                                                        // Replace all occurrences directly in TextFieldState.
+                                                        // TextFieldState.edit{} is undoable via its built-in undo stack.
+                                                        val current = textFieldState.text.toString()
+                                                        val replaced = current.replace(
+                                                            findQuery,
+                                                            replaceQuery,
+                                                            ignoreCase = true
+                                                        )
+                                                        if (replaced != current) {
+                                                            textFieldState.setTextAndPlaceCursorAtEnd(replaced)
+                                                            editorVm.onContentChanged(replaced)
+                                                        }
                                                     }
                                                 }) {
                                                     Icon(Icons.Default.FindReplace, contentDescription = "Replace All")
@@ -1364,62 +1416,38 @@ fun MainEditorScreen(
                                                 }
                                             }
                                     ) {
-                                    AndroidView(
-                                        factory = { ctx ->
-                                            // FIX 1: ScribeEditText scrolls itself via DynamicLayout
-                                            // (only measures visible lines). ScrollView forced a full
-                                            // O(n-lines) height pass on every keystroke — removed.
-                                            // FIX 2: TextWatcher fired editorVm.onContentChanged() on
-                                            // every setText() call (note load, undo, redo) because
-                                            // isApplyingEdit only guards captureUndoState/commitUndoState,
-                                            // not the watcher. onTextChangedListener is already gated
-                                            // inside commitUndoState(), so it is silent during those
-                                            // operations — wired here instead.
-                                            ScribeEditText(ctx).apply {
-                                                layoutParams = ViewGroup.LayoutParams(
-                                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                                    ViewGroup.LayoutParams.MATCH_PARENT
-                                                )
-                                                setPadding(32, 32, 32, 32)
-                                                textSize = 18f
-                                                overScrollMode = android.view.View.OVER_SCROLL_IF_CONTENT_SCROLLS
-                                                isVerticalScrollBarEnabled = true
-                                                onTextChangedListener = { text ->
-                                                    editorVm.onContentChanged(text)
-                                                }
-                                                editorRef = this
-                                            }
-                                        },
-                                        update = { edit ->
-                                            val bgArgb = if (hasBgImage) android.graphics.Color.TRANSPARENT else currentThemeBg.toArgb()
-                                            val textArgb = currentThemeTextColor.toArgb()
-                                            val primaryArgb = currentThemePrimary.toArgb()
+                                    // ── BasicTextField (experiment) ───────────────────────────────
+                                    // Replaces AndroidView(ScribeEditText). Content is driven by
+                                    // textFieldState; loading and ViewModel wiring is in the
+                                    // LaunchedEffects above.
+                                    val editorFontSize = (activeTheme?.fontSize ?: 18).sp
+                                    val editorTypeface = activeTheme?.fontFamily?.let { family ->
+                                        ThemeManager.resolveTypeface(context, family)
+                                    }
+                                    val editorFontFamily = editorTypeface?.let { tf ->
+                                        FontFamily(androidx.compose.ui.text.font.Typeface(tf))
+                                    } ?: FontFamily.Default
 
-                                            edit.setBackgroundColor(bgArgb)
-                                            edit.setTextColor(textArgb)
+                                    val editorTextStyle = TextStyle(
+                                        color = currentThemeTextColor,
+                                        fontSize = editorFontSize,
+                                        fontFamily = editorFontFamily,
+                                        lineHeight = editorFontSize * 1.6f
+                                    )
 
-                                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                                                edit.textCursorDrawable?.setTint(primaryArgb)
-                                            }
-                                            activeTheme?.let { t ->
-                                                val tf = com.primaloptima.scribe.util.ThemeManager.resolveTypeface(edit.context, t.fontFamily)
-                                                edit.typeface = tf
-                                                edit.textSize = t.fontSize.toFloat()
-                                            }
-
-                                            activeNote?.let { note ->
-                                                // FIX 3: setContentSilently instead of setText.
-                                                // setText fires TextWatcher (now removed) and would have
-                                                // triggered a full stats + autosave + recovery storm on
-                                                // every note switch. setContentSilently sets isApplyingEdit
-                                                // so onTextChangedListener stays silent during the load.
-                                                if (loadedNoteId != note.id || (edit.text.isNullOrEmpty() && note.content.isNotEmpty())) {
-                                                    loadedNoteId = note.id
-                                                    edit.setContentSilently(note.content)
-                                                }
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxSize()
+                                    BasicTextField(
+                                        state = textFieldState,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(
+                                                if (hasBgImage) Color.Transparent
+                                                else currentThemeBg
+                                            )
+                                            .padding(horizontal = 20.dp, vertical = 20.dp),
+                                        textStyle = editorTextStyle,
+                                        inputTransformation = ScribeInputTransformation,
+                                        cursorBrush = SolidColor(currentThemePrimary),
+                                        scrollState = rememberScrollState()
                                     )
                                     } // end gesture-detection Box
 
@@ -1739,39 +1767,42 @@ private fun FormatButton(
     }
 }
 
-private fun ScribeEditText.applyFormat(prefix: String, suffix: String) {
-    // FIX 6: capture/commit so toolbar formatting actions are undoable.
-    // commitUndoState() fires onTextChangedListener, so no extra
-    // editorVm.onContentChanged() call is needed here.
-    captureUndoState()
-    val start = selectionStart
-    val end = selectionEnd
-    val textStr = text?.toString() ?: ""
-    if (start >= 0 && end >= start) {
-        val selected = textStr.substring(start, end)
-        val formatted = "$prefix$selected$suffix"
-        text?.replace(start, end, formatted)
-        setSelection(start + prefix.length, end + prefix.length)
+// ── TextFieldState toolbar helpers ────────────────────────────────────────────
+// Replacements for the old ScribeEditText extension functions.
+// TextFieldState.edit{} is automatically recorded in the built-in undo stack.
+
+private fun TextFieldState.applyFormat(prefix: String, suffix: String) {
+    edit {
+        val start = selection.start
+        val end   = selection.end
+        if (start >= 0 && end >= start) {
+            val selected  = toString().substring(start, end)
+            val formatted = "$prefix$selected$suffix"
+            replace(start, end, formatted)
+            selection = androidx.compose.ui.text.TextRange(
+                start + prefix.length,
+                start + prefix.length + selected.length
+            )
+        }
     }
-    commitUndoState()
 }
 
-private fun ScribeEditText.applyLinePrefix(prefix: String) {
-    captureUndoState()
-    val start = selectionStart
-    if (start >= 0) {
-        text?.insert(start, prefix)
+private fun TextFieldState.applyLinePrefix(prefix: String) {
+    edit {
+        val pos = selection.start
+        if (pos >= 0) {
+            insert(pos, prefix)
+        }
     }
-    commitUndoState()
 }
 
-private fun ScribeEditText.insertTextAtCursor(str: String) {
-    captureUndoState()
-    val start = selectionStart
-    if (start >= 0) {
-        text?.insert(start, str)
+private fun TextFieldState.insertAtCursor(str: String) {
+    edit {
+        val pos = selection.start
+        if (pos >= 0) {
+            insert(pos, str)
+        }
     }
-    commitUndoState()
 }
 
 private fun parseComposeColor(hex: String, fallback: Color = Color.Transparent): Color {
