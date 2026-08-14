@@ -88,7 +88,7 @@ import kotlin.math.roundToInt
 // ── Sora Editor imports ───────────────────────────────────────────────────────
 import androidx.compose.ui.viewinterop.AndroidView
 import io.github.rosemoe.sora.widget.CodeEditor
-import io.github.rosemoe.sora.widget.component.Searcher
+import io.github.rosemoe.sora.widget.EditorSearcher
 import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
 import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.text.Content
@@ -1375,10 +1375,7 @@ fun MainEditorScreen(
                                         if (showFindBar && findQuery.isNotEmpty()) {
                                             editor.searcher.search(
                                                 findQuery,
-                                                Searcher.SearchOptions(
-                                                    ignoreCase = true,
-                                                    useRegex  = false
-                                                )
+                                                EditorSearcher.SearchOptions(true, false)
                                             )
                                         } else {
                                             editor.searcher.stopSearch()
