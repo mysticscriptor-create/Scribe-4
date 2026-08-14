@@ -109,6 +109,14 @@ class ScribeEditText @JvmOverloads constructor(
     /** Called by [ScribeInputConnection] right before a destructive edit. */
     fun captureUndoState() {
         if (isApplyingEdit) return
+        val now = System.currentTimeMillis()
+        // PERF FIX 4: Skip the full-buffer copy when we are still inside the
+        // 700ms grouping window AND the stack is non-empty (i.e. there is already
+        // a saved state to group with). commitUndoState() would discard this entry
+        // anyway, so copying now is wasted allocation.
+        // Guard uses lastHistoryMs alone — pendingUndoPush is unreliable because
+        // commitUndoState() nulls it after every commit.
+        if (undoStack.isNotEmpty() && now - lastHistoryMs <= historyGroupMs) return
         val t = text?.toString() ?: ""
         val c = selectionStart.coerceAtLeast(0)
         pendingUndoPush = EditState(t, c)

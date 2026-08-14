@@ -1,10 +1,7 @@
 package com.primaloptima.scribe.ui.screens
 
 import android.net.Uri
-import android.text.Editable
-import android.text.TextWatcher
 import android.view.ViewGroup
-import android.widget.ScrollView
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -1312,10 +1309,14 @@ fun MainEditorScreen(
                                                 )
                                                 IconButton(onClick = {
                                                     if (findQuery.isNotEmpty()) {
-                                                        val currentText = editorRef?.text?.toString() ?: ""
-                                                        val updated = currentText.replace(findQuery, replaceQuery, ignoreCase = true)
-                                                        editorRef?.setText(updated)
-                                                        editorVm.onContentChanged(updated)
+                                                        // FIX 5: replaceAll() handles undo properly and uses
+                                                        // the same regex/case logic as startFind(). Raw
+                                                        // setText() bypassed the undo stack and fired a stats
+                                                        // storm. startFind() must run first to populate the
+                                                        // match list that replaceAll() operates on.
+                                                        editorRef?.startFind(findQuery, findRegex, findCaseSensitive)
+                                                        editorRef?.replaceAll(replaceQuery)
+                                                        editorVm.onContentChanged(editorRef?.text?.toString() ?: "")
                                                     }
                                                 }) {
                                                     Icon(Icons.Default.FindReplace, contentDescription = "Replace All")
@@ -1366,55 +1367,58 @@ fun MainEditorScreen(
                                     ) {
                                     AndroidView(
                                         factory = { ctx ->
-                                            ScrollView(ctx).apply {
-                                                isFillViewport = true
-                                                val edit = ScribeEditText(ctx).apply {
-                                                    layoutParams = ViewGroup.LayoutParams(
-                                                        ViewGroup.LayoutParams.MATCH_PARENT,
-                                                        ViewGroup.LayoutParams.MATCH_PARENT
-                                                    )
-                                                    setPadding(32, 32, 32, 32)
-                                                    textSize = 18f
-                                                    addTextChangedListener(object : TextWatcher {
-                                                        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                                                        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                                                        override fun afterTextChanged(s: Editable?) {
-                                                            editorVm.onContentChanged(s?.toString() ?: "")
-                                                        }
-                                                    })
+                                            // FIX 1: ScribeEditText scrolls itself via DynamicLayout
+                                            // (only measures visible lines). ScrollView forced a full
+                                            // O(n-lines) height pass on every keystroke — removed.
+                                            // FIX 2: TextWatcher fired editorVm.onContentChanged() on
+                                            // every setText() call (note load, undo, redo) because
+                                            // isApplyingEdit only guards captureUndoState/commitUndoState,
+                                            // not the watcher. onTextChangedListener is already gated
+                                            // inside commitUndoState(), so it is silent during those
+                                            // operations — wired here instead.
+                                            ScribeEditText(ctx).apply {
+                                                layoutParams = ViewGroup.LayoutParams(
+                                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                                )
+                                                setPadding(32, 32, 32, 32)
+                                                textSize = 18f
+                                                overScrollMode = android.view.View.OVER_SCROLL_IF_CONTENT_SCROLLS
+                                                isVerticalScrollBarEnabled = true
+                                                onTextChangedListener = { text ->
+                                                    editorVm.onContentChanged(text)
                                                 }
-                                                editorRef = edit
-                                                addView(edit)
+                                                editorRef = this
                                             }
                                         },
-                                        update = { scrollView ->
-                                            val edit = editorRef
-                                            if (edit != null) {
-                                                val bgArgb = if (hasBgImage) android.graphics.Color.TRANSPARENT else currentThemeBg.toArgb()
-                                                val textArgb = currentThemeTextColor.toArgb()
-                                                val primaryArgb = currentThemePrimary.toArgb()
+                                        update = { edit ->
+                                            val bgArgb = if (hasBgImage) android.graphics.Color.TRANSPARENT else currentThemeBg.toArgb()
+                                            val textArgb = currentThemeTextColor.toArgb()
+                                            val primaryArgb = currentThemePrimary.toArgb()
 
-                                                scrollView.setBackgroundColor(bgArgb)
-                                                edit.setBackgroundColor(bgArgb)
-                                                edit.setTextColor(textArgb)
+                                            edit.setBackgroundColor(bgArgb)
+                                            edit.setTextColor(textArgb)
 
-                                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                                                    edit.textCursorDrawable?.setTint(primaryArgb)
-                                                }
-                                                activeTheme?.let { t ->
-                                                    val tf = com.primaloptima.scribe.util.ThemeManager.resolveTypeface(edit.context, t.fontFamily)
-                                                    edit.typeface = tf
-                                                    edit.textSize = t.fontSize.toFloat()
-                                                }
+                                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                                edit.textCursorDrawable?.setTint(primaryArgb)
+                                            }
+                                            activeTheme?.let { t ->
+                                                val tf = com.primaloptima.scribe.util.ThemeManager.resolveTypeface(edit.context, t.fontFamily)
+                                                edit.typeface = tf
+                                                edit.textSize = t.fontSize.toFloat()
                                             }
 
                                             activeNote?.let { note ->
-    val edit = editorRef
-    if (edit != null && (loadedNoteId != note.id || edit.text.isNullOrEmpty() && note.content.isNotEmpty())) {
-        loadedNoteId = note.id
-        edit.setText(note.content)
-    }
-}
+                                                // FIX 3: setContentSilently instead of setText.
+                                                // setText fires TextWatcher (now removed) and would have
+                                                // triggered a full stats + autosave + recovery storm on
+                                                // every note switch. setContentSilently sets isApplyingEdit
+                                                // so onTextChangedListener stays silent during the load.
+                                                if (loadedNoteId != note.id || (edit.text.isNullOrEmpty() && note.content.isNotEmpty())) {
+                                                    loadedNoteId = note.id
+                                                    edit.setContentSilently(note.content)
+                                                }
+                                            }
                                         },
                                         modifier = Modifier.fillMaxSize()
                                     )
@@ -1737,6 +1741,10 @@ private fun FormatButton(
 }
 
 private fun ScribeEditText.applyFormat(prefix: String, suffix: String) {
+    // FIX 6: capture/commit so toolbar formatting actions are undoable.
+    // commitUndoState() fires onTextChangedListener, so no extra
+    // editorVm.onContentChanged() call is needed here.
+    captureUndoState()
     val start = selectionStart
     val end = selectionEnd
     val textStr = text?.toString() ?: ""
@@ -1746,20 +1754,25 @@ private fun ScribeEditText.applyFormat(prefix: String, suffix: String) {
         text?.replace(start, end, formatted)
         setSelection(start + prefix.length, end + prefix.length)
     }
+    commitUndoState()
 }
 
 private fun ScribeEditText.applyLinePrefix(prefix: String) {
+    captureUndoState()
     val start = selectionStart
     if (start >= 0) {
         text?.insert(start, prefix)
     }
+    commitUndoState()
 }
 
 private fun ScribeEditText.insertTextAtCursor(str: String) {
+    captureUndoState()
     val start = selectionStart
     if (start >= 0) {
         text?.insert(start, str)
     }
+    commitUndoState()
 }
 
 private fun parseComposeColor(hex: String, fallback: Color = Color.Transparent): Color {
