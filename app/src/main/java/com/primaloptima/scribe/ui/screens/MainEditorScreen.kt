@@ -58,10 +58,14 @@ import androidx.compose.foundation.layout.isImeVisible
 import dev.chrisbanes.haze.hazeSource
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.SpanStyle
@@ -95,7 +99,7 @@ import io.github.rosemoe.sora.text.Content
 import com.primaloptima.scribe.util.ScribeProseLanguage
 import com.primaloptima.scribe.util.ThemeManager
 
-@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun MainEditorScreen(
     editorVm: EditorViewModel,
@@ -252,9 +256,15 @@ fun MainEditorScreen(
     // find/replace can call into it without recomposition.
     var soraEditorRef by remember { mutableStateOf<CodeEditor?>(null) }
 
-    // Bug 2 fix (preserved): rememberSaveable so loadedNoteId survives
-    // recomposition when returning from History.
+    // loadedNoteId survives recomposition (rememberSaveable) but resets when
+    // the composable is fully destroyed (different back-stack entry).
     var loadedNoteId by rememberSaveable { mutableStateOf<String?>(null) }
+    // BUG 2 FIX: reloadToken increments on every composable creation so the
+    // note-loading LaunchedEffect always runs setContent after a nav round-trip.
+    // appliedReloadToken uses plain remember (not saveable) so it resets to -1
+    // on every recreation — guaranteeing the first update always loads.
+    var reloadToken by rememberSaveable { mutableStateOf(0) }
+    var appliedReloadToken by remember { mutableStateOf(-1) }
     val expandedTreeState = remember { mutableStateMapOf<String, Boolean>() }
 
     // Floating pill state
@@ -288,6 +298,11 @@ fun MainEditorScreen(
         }
     }
 
+    // Increments reloadToken once per composable creation. Nav3 destroys and
+    // recreates this composable on every back-stack entry, so this fires both
+    // on first open and on return from History / Shortcuts / etc.
+    LaunchedEffect(Unit) { reloadToken++ }
+
     LaunchedEffect(initialNoteId) {
         if (!initialNoteId.isNullOrEmpty()) {
             editorVm.loadNote(initialNoteId)
@@ -296,20 +311,21 @@ fun MainEditorScreen(
         }
     }
 
-    // ── Load note content into Sora CodeEditor ────────────────────────────────
-    // Mirrors the old AndroidView update lambda's loadedNoteId guard:
-    // only setText when the note actually changes or the editor is empty.
-    // soraEditorRef may be null on first composition (before AndroidView factory
-    // runs), so this also re-fires when soraEditorRef becomes non-null.
-    LaunchedEffect(activeNote?.id, activeNote?.content, soraEditorRef) {
+    // Load note content into Sora CodeEditor.
+    // Fires when the note changes, the editor view is first created (soraEditorRef
+    // becomes non-null), OR when reloadToken changes (composable recreated after a
+    // nav round-trip — editor is blank but loadedNoteId still matches the note).
+    LaunchedEffect(activeNote?.id, soraEditorRef, reloadToken) {
         val note = activeNote ?: return@LaunchedEffect
         val editor = soraEditorRef ?: return@LaunchedEffect
-        if (loadedNoteId != note.id ||
-            (editor.text.length == 0 && note.content.isNotEmpty())) {
+        val shouldLoad = loadedNoteId != note.id
+            || appliedReloadToken != reloadToken
+            || editor.text.length == 0 && note.content.isNotEmpty()
+        if (shouldLoad) {
             loadedNoteId = note.id
-            // setText() is a programmatic replacement — it does NOT fire the
-            // ContentChangeEvent subscription, so it won't loop back into
-            // onContentChanged. Sora handles this correctly out of the box.
+            appliedReloadToken = reloadToken
+            // setText() is programmatic — does NOT fire ContentChangeEvent,
+            // so it won't loop back into onContentChanged.
             editor.setText(note.content)
         }
     }
@@ -322,6 +338,11 @@ fun MainEditorScreen(
         onDispose {
             activeNote?.let { _ ->
                 val currentText = soraEditorForDispose?.text?.toString() ?: ""
+                // BUG 3 FIX: flush before snapshot so words typed within the
+                // 500ms autosave debounce window are never lost on back press.
+                // viewModelScope outlives the composable so the IO coroutine
+                // inside flushPendingContent() completes safely after nav pop.
+                editorVm.flushPendingContent()
                 editorVm.saveVersionSnapshotOnLeave(currentText)
             }
         }
@@ -335,28 +356,49 @@ fun MainEditorScreen(
         noteListVm.connectExternalFolder(uri, name)
     }
 
+    // BUG 1 FIX (gesture direction lock):
+    // Old detectHorizontalDragGestures fired whenever totalX exceeded 36dp —
+    // even on diagonal scrolls where the finger drifted sideways. The fix
+    // tracks both axes: drawer only opens when horizontal is the dominant
+    // direction (absX > absY × 1.5) AND the gesture starts from the edge
+    // (left 30% for left drawer, right 30% for right drawer).
+    // Both ModalNavigationDrawers are set gesturesEnabled=false below so their
+    // built-in recognizer doesn't compete with this one.
     val swipeGestureModifier = Modifier.pointerInput(leftDrawerState, rightDrawerState) {
-        var startX = 0f
-        var totalX = 0f
-        detectHorizontalDragGestures(
-            onDragStart = { offset ->
-                startX = offset.x
-                totalX = 0f
-            },
-            onHorizontalDrag = { change, dragAmount ->
-                totalX += dragAmount
-                val threshold = 36.dp.toPx()
-                if (totalX > threshold && leftDrawerState.isClosed
-                        && !leftDrawerState.isAnimationRunning && startX < size.width * 0.5f) {
-                    change.consume()
-                    scope.launch { leftDrawerState.open() }
-                } else if (totalX < -threshold && rightDrawerState.isClosed
-                        && !rightDrawerState.isAnimationRunning && startX > size.width * 0.5f) {
-                    change.consume()
-                    scope.launch { rightDrawerState.open() }
+        val threshold = 36.dp.toPx()
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val startX = down.position.x
+            var totalX = 0f
+            var totalY = 0f
+            var triggered = false
+            while (true) {
+                val event = awaitPointerEvent()
+                val drag = event.changes.firstOrNull() ?: break
+                if (!drag.pressed) break
+                totalX += drag.positionChange().x
+                totalY += drag.positionChange().y
+                if (!triggered) {
+                    val absX = kotlin.math.abs(totalX)
+                    val absY = kotlin.math.abs(totalY)
+                    if (absX > threshold && absX > absY * 1.5f) {
+                        if (totalX > 0 && leftDrawerState.isClosed
+                                && !leftDrawerState.isAnimationRunning
+                                && startX < size.width * 0.3f) {
+                            drag.consume()
+                            triggered = true
+                            scope.launch { leftDrawerState.open() }
+                        } else if (totalX < 0 && rightDrawerState.isClosed
+                                && !rightDrawerState.isAnimationRunning
+                                && startX > size.width * 0.7f) {
+                            drag.consume()
+                            triggered = true
+                            scope.launch { rightDrawerState.open() }
+                        }
+                    }
                 }
             }
-        )
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -391,7 +433,7 @@ fun MainEditorScreen(
 
         ModalNavigationDrawer(
             drawerState = leftDrawerState,
-            gesturesEnabled = true,
+            gesturesEnabled = false, // swipeGestureModifier is the sole recognizer
             drawerContent = {
                 CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap) {
                 ModalDrawerSheet(
@@ -801,7 +843,7 @@ fun MainEditorScreen(
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
                 ModalNavigationDrawer(
                     drawerState = rightDrawerState,
-                    gesturesEnabled = true,
+                    gesturesEnabled = false, // swipeGestureModifier is the sole recognizer
                     drawerContent = {
                         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                         CompositionLocalProvider(LocalOneShotBitmap provides rightOneShotBitmap) {
@@ -1484,7 +1526,14 @@ fun MainEditorScreen(
                                             // Notify Sora the scheme changed so it redraws.
                                             editor.colorScheme = editor.colorScheme
                                         },
-                                        modifier = Modifier.fillMaxSize()
+                                        // pointerInteropFilter: pass every MotionEvent straight to
+                                        // Sora's View layer and return false so Compose still sees
+                                        // the event. Without this, Compose re-evaluates each touch
+                                        // frame and stops dispatching to the View mid-scroll —
+                                        // causing the "scroll stops after an inch" symptom.
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .pointerInteropFilter { false }
                                     )
                                     } // end gesture-detection Box
 
