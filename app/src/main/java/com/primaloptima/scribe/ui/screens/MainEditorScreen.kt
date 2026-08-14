@@ -88,7 +88,7 @@ import kotlin.math.roundToInt
 // ── Sora Editor imports ───────────────────────────────────────────────────────
 import androidx.compose.ui.viewinterop.AndroidView
 import io.github.rosemoe.sora.widget.CodeEditor
-import io.github.rosemoe.sora.widget.component.EditorSearcher
+import io.github.rosemoe.sora.widget.component.Searcher
 import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
 import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.text.Content
@@ -1375,7 +1375,7 @@ fun MainEditorScreen(
                                         if (showFindBar && findQuery.isNotEmpty()) {
                                             editor.searcher.search(
                                                 findQuery,
-                                                EditorSearcher.SearchOptions(
+                                                Searcher.SearchOptions(
                                                     ignoreCase = true,
                                                     useRegex  = false
                                                 )
@@ -1830,8 +1830,7 @@ private fun CodeEditor.applyFormat(prefix: String, suffix: String) {
 
 private fun CodeEditor.applyLinePrefix(prefix: String) {
     // Insert prefix at the start of the current line.
-    val line      = cursor.leftLine
-    val lineStart = text.getLineStart(line)
+    val line = cursor.leftLine
     text.insert(line, 0, prefix)
     // Keep cursor at the same visual position, shifted right by prefix length.
     val newCol = cursor.leftColumn + prefix.length
