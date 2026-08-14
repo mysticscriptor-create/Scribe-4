@@ -1822,13 +1822,12 @@ private fun FormatButton(
 private fun CodeEditor.applyFormat(prefix: String, suffix: String) {
     val cur = cursor
     if (cur.isSelected) {
-        // Wrap selected text. Use the 4-arg subSequence (line/col) not the
-        // 2-arg int overload which treats args as absolute char indices and
-        // returns wrong content on multi-line documents.
-        val selected = text.subSequence(
-            cur.leftLine,  cur.leftColumn,
-            cur.rightLine, cur.rightColumn
-        ).toString()
+        // Wrap selected text. Convert line/col positions to absolute char
+        // indices via the Content indexer, then use the 2-arg subSequence.
+        val indexer = text.indexer
+        val startIdx = indexer.getCharIndex(cur.leftLine,  cur.leftColumn)
+        val endIdx   = indexer.getCharIndex(cur.rightLine, cur.rightColumn)
+        val selected = text.subSequence(startIdx, endIdx).toString()
         // Replace the selection with the wrapped version in one operation
         // so undo restores the original selection.
         text.replace(
