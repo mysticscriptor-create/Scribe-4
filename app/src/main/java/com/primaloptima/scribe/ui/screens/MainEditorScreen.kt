@@ -1309,12 +1309,11 @@ fun MainEditorScreen(
                                                 )
                                                 IconButton(onClick = {
                                                     if (findQuery.isNotEmpty()) {
-                                                        // FIX 5: replaceAll() handles undo properly and uses
-                                                        // the same regex/case logic as startFind(). Raw
-                                                        // setText() bypassed the undo stack and fired a stats
-                                                        // storm. startFind() must run first to populate the
-                                                        // match list that replaceAll() operates on.
-                                                        editorRef?.startFind(findQuery, findRegex, findCaseSensitive)
+                                                        // FIX 5: replaceAll() handles undo properly.
+                                                        // startFind() populates the match list first.
+                                                        // false, false = no regex, case-insensitive
+                                                        // (matches original behavior).
+                                                        editorRef?.startFind(findQuery, false, false)
                                                         editorRef?.replaceAll(replaceQuery)
                                                         editorVm.onContentChanged(editorRef?.text?.toString() ?: "")
                                                     }
