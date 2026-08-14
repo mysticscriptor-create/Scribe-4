@@ -58,14 +58,11 @@ import androidx.compose.foundation.layout.isImeVisible
 import dev.chrisbanes.haze.hazeSource
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerInteropFilter
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.SpanStyle
@@ -356,66 +353,7 @@ fun MainEditorScreen(
         noteListVm.connectExternalFolder(uri, name)
     }
 
-    // BUG 1 FIX (gesture direction lock):
-    // Old detectHorizontalDragGestures fired whenever totalX exceeded 36dp —
-    // even on diagonal scrolls where the finger drifted sideways. The fix
-    // tracks both axes: drawer only opens when horizontal is the dominant
-    // direction (absX > absY × 1.5) AND the gesture starts from the edge
-    // (left 30% for left drawer, right 30% for right drawer).
-    // Both ModalNavigationDrawers are set gesturesEnabled=false below so their
-    // built-in recognizer doesn't compete with this one.
-    val swipeGestureModifier = Modifier.pointerInput(leftDrawerState, rightDrawerState) {
-        val threshold = 36.dp.toPx()
-        awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false)
-            val startX = down.position.x
-            var totalX = 0f
-            var totalY = 0f
-            var triggered = false
-            while (true) {
-                val event = awaitPointerEvent()
-                val drag = event.changes.firstOrNull() ?: break
-                if (!drag.pressed) break
-                totalX += drag.positionChange().x
-                totalY += drag.positionChange().y
-                if (!triggered) {
-                    val absX = kotlin.math.abs(totalX)
-                    val absY = kotlin.math.abs(totalY)
-                    if (absX > threshold && absX > absY * 1.5f) {
-                        // ── Open ──────────────────────────────────────────────
-                        if (totalX > 0 && leftDrawerState.isClosed
-                                && !leftDrawerState.isAnimationRunning
-                                && startX < size.width * 0.3f) {
-                            drag.consume()
-                            triggered = true
-                            scope.launch { leftDrawerState.open() }
-                        } else if (totalX < 0 && rightDrawerState.isClosed
-                                && !rightDrawerState.isAnimationRunning
-                                && startX > size.width * 0.7f) {
-                            drag.consume()
-                            triggered = true
-                            scope.launch { rightDrawerState.open() }
-                        // ── Close ─────────────────────────────────────────────
-                        // Swipe left (totalX < 0) closes the left drawer.
-                        // Swipe right (totalX > 0) closes the right drawer.
-                        // No edge restriction — the whole screen is valid when
-                        // a drawer is already open.
-                        } else if (totalX < 0 && !leftDrawerState.isClosed
-                                && !leftDrawerState.isAnimationRunning) {
-                            drag.consume()
-                            triggered = true
-                            scope.launch { leftDrawerState.close() }
-                        } else if (totalX > 0 && !rightDrawerState.isClosed
-                                && !rightDrawerState.isAnimationRunning) {
-                            drag.consume()
-                            triggered = true
-                            scope.launch { rightDrawerState.close() }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (isEditorOnlyBg) {
@@ -449,7 +387,7 @@ fun MainEditorScreen(
 
         ModalNavigationDrawer(
             drawerState = leftDrawerState,
-            gesturesEnabled = false, // swipeGestureModifier is the sole recognizer
+            gesturesEnabled = true,
             drawerContent = {
                 CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap) {
                 ModalDrawerSheet(
@@ -859,7 +797,7 @@ fun MainEditorScreen(
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
                 ModalNavigationDrawer(
                     drawerState = rightDrawerState,
-                    gesturesEnabled = false, // swipeGestureModifier is the sole recognizer
+                    gesturesEnabled = true,
                     drawerContent = {
                         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                         CompositionLocalProvider(LocalOneShotBitmap provides rightOneShotBitmap) {
@@ -1167,7 +1105,7 @@ fun MainEditorScreen(
                     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                         Scaffold(
                             containerColor = Color.Transparent,
-                            modifier = Modifier.then(swipeGestureModifier),
+                            modifier = Modifier,
                             contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.ime),
                             topBar = {
                                 CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
