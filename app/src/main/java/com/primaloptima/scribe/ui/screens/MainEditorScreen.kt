@@ -92,6 +92,7 @@ import io.github.rosemoe.sora.widget.EditorSearcher
 import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
 import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.text.Content
+import com.primaloptima.scribe.util.ScribeProseLanguage
 import com.primaloptima.scribe.util.ThemeManager
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -1441,8 +1442,9 @@ fun MainEditorScreen(
                                                 isLineNumberEnabled      = false
                                                 isHighlightCurrentLine   = false
                                                 isWordwrap               = true
-                                                // No language = plain text, zero syntax overhead.
-                                                setEditorLanguage(null)
+                                                // ScribeProseLanguage: prose auto-pairs only, zero syntax overhead.
+                                                // A new instance per editor is required by Sora's Language contract.
+                                                setEditorLanguage(ScribeProseLanguage())
 
                                                 // ── Content change → ViewModel ─────────────────
                                                 // subscribeEvent fires on every user edit.
