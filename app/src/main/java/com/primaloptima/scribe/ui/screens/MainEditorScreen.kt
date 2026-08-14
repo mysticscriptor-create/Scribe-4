@@ -55,7 +55,10 @@ import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
 import com.primaloptima.scribe.ui.theme.LocalAppTheme
 import com.primaloptima.scribe.util.BitmapBlur
 import androidx.compose.ui.platform.LocalView
-import com.primaloptima.scribe.ui.util.rememberKeyboardVisibility
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import dev.chrisbanes.haze.hazeSource
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
@@ -1227,7 +1230,7 @@ fun MainEditorScreen(
                             },
                             bottomBar = {
                                 CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
-                                val isKeyboardVisible = rememberKeyboardVisibility()
+                                val isKeyboardVisible = WindowInsets.isImeVisible
                                 AnimatedVisibility(
                                     visible = isKeyboardVisible,
                                     enter = slideInVertically(initialOffsetY = { it }),
@@ -1237,6 +1240,10 @@ fun MainEditorScreen(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .frostedBar(hazeState)
+                                            // imePadding() lifts the toolbar above the keyboard.
+                                            // Must come before horizontalScroll so the scroll
+                                            // area itself isn't shrunk by the IME inset.
+                                            .imePadding()
                                             .horizontalScroll(rememberScrollState())
                                             .padding(horizontal = 8.dp, vertical = 6.dp),
                                         horizontalArrangement = Arrangement.spacedBy(6.dp),

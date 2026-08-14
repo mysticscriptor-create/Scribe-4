@@ -3,8 +3,7 @@ package com.primaloptima.scribe.ui.theme
 import android.app.Activity
 import android.graphics.Bitmap
 import coil3.BitmapImage
-import android.graphics.RenderEffect as AndroidRenderEffect
-import android.graphics.Shader
+
 import android.os.Build
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.snap
@@ -42,8 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asComposeRenderEffect
-import androidx.compose.ui.graphics.graphicsLayer
+
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -1066,19 +1064,15 @@ fun ScribeComposeTheme(
                             contentScale = ContentScale.FillBounds,
                             modifier = Modifier
                                 .fillMaxSize()
+                                // hazeSource registers this image as the layer Haze blurs from.
+                                // On API 31+, hazeEffect on child composables (bars, cards, FABs)
+                                // does all the blurring — the source must be the raw unprocessed
+                                // image. Applying renderEffect here creates an isolated offscreen
+                                // GPU render node that Haze cannot see through, which is why blur
+                                // was broken on API 31+. Pre-API-31 uses a pre-blurred software
+                                // bitmap with blurEnabled = false, so it never needs renderEffect
+                                // here either.
                                 .hazeSource(state = hazeState)
-                                .then(
-                                    if (bgMode == "blurred" && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && blurIntensity > 0f) {
-                                        Modifier.graphicsLayer {
-                                            val radiusPx = blurIntensity * density
-                                            if (radiusPx > 0f) {
-                                                renderEffect = AndroidRenderEffect
-                                                    .createBlurEffect(radiusPx, radiusPx, Shader.TileMode.CLAMP)
-                                                    .asComposeRenderEffect()
-                                            }
-                                        }
-                                    } else Modifier
-                                )
                         )
                         // Only apply the colour tint overlay in "blurred" mode.
                         // In "image" mode the user wants the image as-is — no wash.
