@@ -1791,7 +1791,7 @@ private fun TextFieldState.applyLinePrefix(prefix: String) {
     edit {
         val pos = selection.start
         if (pos >= 0) {
-            insert(pos, prefix)
+            replace(pos, pos, prefix)
         }
     }
 }
@@ -1800,7 +1800,7 @@ private fun TextFieldState.insertAtCursor(str: String) {
     edit {
         val pos = selection.start
         if (pos >= 0) {
-            insert(pos, str)
+            replace(pos, pos, str)
         }
     }
 }

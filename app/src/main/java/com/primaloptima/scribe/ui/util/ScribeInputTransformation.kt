@@ -1,5 +1,6 @@
 package com.primaloptima.scribe.ui.util
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.ui.text.TextRange
@@ -15,6 +16,7 @@ import androidx.compose.ui.text.TextRange
  * Registered as inputTransformation on BasicTextField.
  * The undo/redo stack is provided natively by TextFieldState — no custom stack needed.
  */
+@OptIn(ExperimentalFoundationApi::class)
 object ScribeInputTransformation : InputTransformation {
 
     private val pairMap: Map<Char, Char> = mapOf(
@@ -55,7 +57,7 @@ object ScribeInputTransformation : InputTransformation {
                 if (openChar != null) {
                     // The deleted char was at (cursorPos) in original = openChar position.
                     // We delete the close char that's now sitting at cursorPos.
-                    delete(cursorPos, cursorPos + 1)
+                    replace(cursorPos, cursorPos + 1, "")
                 }
             }
             return
@@ -73,7 +75,7 @@ object ScribeInputTransformation : InputTransformation {
             val charAfterNewline = fullText.getOrNull(cursorPos)
             if (charAfterNewline != null && charAfterNewline in closeChars) {
                 // Remove the newline, move cursor past the close char
-                delete(newRange.start, newRange.end)
+                replace(newRange.start, newRange.end, "")
                 selection = TextRange(newRange.start + 1)
             }
             return
@@ -84,7 +86,7 @@ object ScribeInputTransformation : InputTransformation {
             val charAfterInsert = fullText.getOrNull(cursorPos)
             if (charAfterInsert == ch) {
                 // Remove the duplicate we just inserted, move cursor past the existing one
-                delete(newRange.start, newRange.end)
+                replace(newRange.start, newRange.end, "")
                 selection = TextRange(newRange.start + 1)
                 return
             }
@@ -105,7 +107,7 @@ object ScribeInputTransformation : InputTransformation {
 
                 if (shouldPair) {
                     // Insert the close char right after, leave cursor between the pair
-                    insert(cursorPos, closeChar.toString())
+                    replace(cursorPos, cursorPos, closeChar.toString())
                     selection = TextRange(cursorPos)
                 }
             }
