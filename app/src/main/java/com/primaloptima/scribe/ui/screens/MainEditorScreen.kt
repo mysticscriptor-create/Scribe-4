@@ -59,7 +59,7 @@ import androidx.compose.foundation.layout.isImeVisible
 import dev.chrisbanes.haze.hazeSource
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -338,27 +338,50 @@ fun MainEditorScreen(
     }
 
     val swipeGestureModifier = Modifier.pointerInput(leftDrawerState, rightDrawerState) {
-        var startX = 0f
-        var totalX = 0f
-        detectHorizontalDragGestures(
-            onDragStart = { offset ->
-                startX = offset.x
-                totalX = 0f
-            },
-            onHorizontalDrag = { change, dragAmount ->
-                totalX += dragAmount
-                val threshold = 36.dp.toPx()
-                if (totalX > threshold && leftDrawerState.isClosed
-                        && !leftDrawerState.isAnimationRunning && startX < size.width * 0.5f) {
-                    change.consume()
-                    scope.launch { leftDrawerState.open() }
-                } else if (totalX < -threshold && rightDrawerState.isClosed
-                        && !rightDrawerState.isAnimationRunning && startX > size.width * 0.5f) {
-                    change.consume()
-                    scope.launch { rightDrawerState.open() }
+        // Angle-aware drawer swipe: only claim the gesture as horizontal when
+        // |totalX| > |totalY| * 2 — i.e. the finger is moving at least 2× more
+        // sideways than vertically. Pure or near-vertical scrolls never trigger
+        // the drawer even if the finger drifts slightly left or right.
+        awaitPointerEventScope {
+            while (true) {
+                // Wait for a finger-down
+                val down = awaitPointerEvent().changes.firstOrNull() ?: continue
+                if (!down.pressed) continue
+
+                val startX   = down.position.x
+                var totalX   = 0f
+                var totalY   = 0f
+                var claimed  = false
+
+                // Track movement until finger lifts
+                while (true) {
+                    val move = awaitPointerEvent()
+                    val change = move.changes.firstOrNull() ?: break
+                    if (!change.pressed) break
+
+                    totalX += change.position.x - change.previousPosition.x
+                    totalY += change.position.y - change.previousPosition.y
+
+                    // Only act if motion is dominantly horizontal (2:1 ratio)
+                    if (!claimed && kotlin.math.abs(totalX) > kotlin.math.abs(totalY) * 2f) {
+                        val threshold = 36.dp.toPx()
+                        if (totalX > threshold && leftDrawerState.isClosed
+                                && !leftDrawerState.isAnimationRunning
+                                && startX < size.width * 0.5f) {
+                            change.consume()
+                            claimed = true
+                            scope.launch { leftDrawerState.open() }
+                        } else if (totalX < -threshold && rightDrawerState.isClosed
+                                && !rightDrawerState.isAnimationRunning
+                                && startX > size.width * 0.5f) {
+                            change.consume()
+                            claimed = true
+                            scope.launch { rightDrawerState.open() }
+                        }
+                    }
                 }
             }
-        )
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -1398,20 +1421,22 @@ fun MainEditorScreen(
                                                 awaitPointerEventScope {
                                                     var lastTapTime = 0L
                                                     while (true) {
+                                                        // Only act on finger-down transitions at Initial pass.
+                                                        // MOVE and UP events are never touched here so Sora's
+                                                        // vertical scroll gesture is never competed with.
                                                         val event = awaitPointerEvent(PointerEventPass.Initial)
                                                         val down = event.changes.firstOrNull() ?: continue
-                                                        if (down.pressed && !down.previousPressed) {
-                                                            val now = System.currentTimeMillis()
-                                                            val diff = now - lastTapTime
-                                                            if (diff in doubleTapMinTime..doubleTapTimeout) {
-                                                                // Double tap — consume and toggle zen
-                                                                down.consume()
-                                                                editorVm.toggleZen()
-                                                                lastTapTime = 0L
-                                                            } else {
-                                                                // Single tap — don't consume, let it reach the editor
-                                                                lastTapTime = now
-                                                            }
+                                                        if (!down.pressed || down.previousPressed) continue
+                                                        val now = System.currentTimeMillis()
+                                                        val diff = now - lastTapTime
+                                                        if (diff in doubleTapMinTime..doubleTapTimeout) {
+                                                            // Double tap — consume and toggle zen
+                                                            down.consume()
+                                                            editorVm.toggleZen()
+                                                            lastTapTime = 0L
+                                                        } else {
+                                                            // Single tap — don't consume, let it reach the editor
+                                                            lastTapTime = now
                                                         }
                                                     }
                                                 }
@@ -1493,6 +1518,49 @@ fun MainEditorScreen(
                                                 scheme.setColor(EditorColorScheme.LINE_NUMBER_BACKGROUND, bgArgb)
                                                 scheme.setColor(EditorColorScheme.LINE_NUMBER,            bgArgb)
                                                 editor.colorScheme = scheme
+
+                                                // ── Text action popup styling ──────────────────
+                                                // Match the ScribeFab border language: solid surface
+                                                // fill + hairline vertical-gradient accent stroke
+                                                // (accent top → transparent bottom, 0.7dp wide).
+                                                // GradientDrawable can't stroke with a gradient, so
+                                                // we layer a semi-transparent gradient rect on top of
+                                                // the fill — same visual as Brush.verticalGradient.
+                                                val density = context.resources.displayMetrics.density
+                                                val cornerPx = 24f * density
+                                                val accentArgb = android.graphics.Color.parseColor(theme.colors.accent)
+                                                val surfaceArgb = android.graphics.Color.parseColor(theme.colors.surface)
+
+                                                // Layer 0 — solid surface fill
+                                                val fillDrawable = android.graphics.drawable.GradientDrawable().apply {
+                                                    setColor(surfaceArgb)
+                                                    cornerRadius = cornerPx
+                                                }
+
+                                                // Layer 1 — gradient overlay: accent@28% top → transparent bottom
+                                                // alpha 0.28 * 255 = ~71
+                                                val strokeOverlay = android.graphics.drawable.GradientDrawable(
+                                                    android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                                                    intArrayOf(
+                                                        android.graphics.Color.argb(
+                                                            71,
+                                                            android.graphics.Color.red(accentArgb),
+                                                            android.graphics.Color.green(accentArgb),
+                                                            android.graphics.Color.blue(accentArgb)
+                                                        ),
+                                                        android.graphics.Color.TRANSPARENT
+                                                    )
+                                                ).apply {
+                                                    cornerRadius = cornerPx
+                                                }
+
+                                                val popupBackground = android.graphics.drawable.LayerDrawable(
+                                                    arrayOf(fillDrawable, strokeOverlay)
+                                                )
+
+                                                editor.getComponent(
+                                                    io.github.rosemoe.sora.widget.component.EditorTextActionWindow::class.java
+                                                ).popupWindow.setBackgroundDrawable(popupBackground)
                                             }
                                         },
                                         modifier = Modifier.fillMaxSize()
