@@ -350,15 +350,21 @@ fun MainEditorScreen(
         BackHandler { scope.launch { rightDrawerState.close() } }
     }
 
-    // ── Double-tap → Zen toggle ───────────────────────────────────────────────
-    // Minimal gesture interceptor: only watches for a double-tap pattern and
-    // consumes it before Sora's own double-tap word-select fires.
-    // Everything else (drawer swipes, scroll, selection) is untouched and
-    // handled natively by ModalNavigationDrawer / Sora respectively.
+    // ── Gesture Router: double-tap zen + edge drawer open ────────────────────
+    // gesturesEnabled=false on both drawers because ModalNavigationDrawer with
+    // gesturesEnabled=true installs a full-screen touch interceptor that steals
+    // every gesture from Sora (scroll, selection, cursor). Instead we handle
+    // only two things here and pass everything else through untouched:
+    //   1. Edge swipe (≤20dp from side, horizontal) → open the drawer.
+    //   2. Double-tap → zen toggle (consuming the DOWN before Sora's word-select).
+    // Close is handled by: scrim tap (built-in) + BackHandler above.
     Box(modifier = Modifier
         .fillMaxSize()
-        .pointerInput(Unit) {
+        .pointerInput(leftDrawerState, rightDrawerState) {
+            val edgeZonePx       = 20.dp.toPx()
+            val slopPx           = 18.dp.toPx()
             val tapSlopPx        = 16f
+            val drawerTriggerPx  = 72.dp.toPx()
             val doubleTapTimeout = viewConfiguration.doubleTapTimeoutMillis
             val doubleTapMinTime = viewConfiguration.doubleTapMinTimeMillis
 
@@ -367,8 +373,6 @@ fun MainEditorScreen(
 
             awaitPointerEventScope {
                 while (true) {
-                    // See every DOWN even if a child already consumed it.
-                    // Initial pass so we run before Sora processes the event.
                     val down      = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     val touchTime = System.currentTimeMillis()
                     val startX    = down.position.x
@@ -377,6 +381,7 @@ fun MainEditorScreen(
                     // Expire stale pending tap
                     pendingTap?.let { if (touchTime - it.time > doubleTapTimeout) pendingTap = null }
 
+                    // ── Double-tap? ────────────────────────────────────────
                     val isSecondTap = pendingTap?.let { first ->
                         val dt  = touchTime - first.time
                         val dxt = startX - first.x; val dyt = startY - first.y
@@ -386,11 +391,8 @@ fun MainEditorScreen(
 
                     if (isSecondTap) {
                         pendingTap = null
-                        // Consume DOWN now so Sora's word-select never fires
-                        down.consume()
+                        down.consume() // block Sora's word-select
                         var becameDrag = false
-
-                        // Watch the rest of this touch
                         while (true) {
                             val event  = awaitPointerEvent(PointerEventPass.Initial)
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -400,16 +402,53 @@ fun MainEditorScreen(
                             }
                             val cdx = change.position.x - startX
                             val cdy = change.position.y - startY
-                            if (kotlin.math.sqrt(cdx * cdx + cdy * cdy) > tapSlopPx) {
-                                becameDrag = true
-                                // Don't consume — let Sora handle the drag
+                            if (kotlin.math.sqrt(cdx * cdx + cdy * cdy) > tapSlopPx) becameDrag = true
+                        }
+                        continue
+                    }
+
+                    // Record first tap — do NOT drain, everything passes through
+                    pendingTap = PendingTap(startX, startY, touchTime)
+
+                    // ── Edge touch? Watch for horizontal swipe to open drawer ─
+                    val isLeftEdge  = startX < edgeZonePx
+                    val isRightEdge = startX > size.width - edgeZonePx
+                    if (!isLeftEdge && !isRightEdge) continue // not edge — release immediately
+
+                    var hasExitedSlop = false
+                    var drawerFired   = false
+                    while (true) {
+                        val event  = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+
+                        val dx   = change.position.x - startX
+                        val dy   = change.position.y - startY
+                        val dist = kotlin.math.sqrt(dx * dx + dy * dy)
+
+                        if (!hasExitedSlop && dist > slopPx) {
+                            hasExitedSlop = true
+                            val adx = if (dx < 0f) -dx else dx
+                            val ady = if (dy < 0f) -dy else dy
+                            // Vertical or ambiguous → abandon, let Sora/scroll own it
+                            if (ady >= adx * 1.3f) break
+                            // Diagonal ambiguous (neither clearly horiz) → abandon
+                            if (adx <= ady * 1.3f) break
+                        }
+
+                        if (hasExitedSlop) {
+                            val towardCenter = (isLeftEdge && dx > 0f) || (isRightEdge && dx < 0f)
+                            if (!towardCenter) break // wrong direction — don't open
+                            val absDx = if (dx < 0f) -dx else dx
+                            change.consume()
+                            if (!drawerFired && absDx > drawerTriggerPx) {
+                                drawerFired = true
+                                scope.launch {
+                                    if (isLeftEdge) leftDrawerState.open()
+                                    else rightDrawerState.open()
+                                }
                             }
                         }
-                    } else {
-                        // First tap — just record it, do NOT drain.
-                        // Releasing immediately lets all events (scroll, drag,
-                        // selection) pass through to Sora / drawers untouched.
-                        pendingTap = PendingTap(startX, startY, touchTime)
                     }
                 }
             }
@@ -446,7 +485,7 @@ fun MainEditorScreen(
 
         ModalNavigationDrawer(
             drawerState = leftDrawerState,
-            gesturesEnabled = true,
+            gesturesEnabled = false,
             drawerContent = {
                 CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap) {
                 ModalDrawerSheet(
@@ -856,7 +895,7 @@ fun MainEditorScreen(
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
                 ModalNavigationDrawer(
                     drawerState = rightDrawerState,
-                    gesturesEnabled = true,
+                    gesturesEnabled = false,
                     drawerContent = {
                         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                         CompositionLocalProvider(LocalOneShotBitmap provides rightOneShotBitmap) {
