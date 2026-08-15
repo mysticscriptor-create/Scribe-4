@@ -62,6 +62,8 @@ import coil3.compose.AsyncImage
 
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.awaitPointerEventScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.SpanStyle
@@ -396,7 +398,7 @@ fun MainEditorScreen(
                     val isSecondTap = pendingTap?.let { first ->
                         val dt   = touchTime - first.time
                         val dist = kotlin.math.hypot(startX - first.x, startY - first.y)
-                        dt in doubleTapMinTime..doubleTapTimeout && dist < tapSlopPx
+                        dt >= doubleTapMinTime && dt <= doubleTapTimeout && dist < tapSlopPx
                     } ?: false
 
                     if (isSecondTap) {
@@ -1705,7 +1707,6 @@ fun MainEditorScreen(
                                         modifier = Modifier
                                             .fillMaxSize()
                                     )
-                                    } // end editor Box
 
                                 // Floating Word Count Pill + Zen FAB — always visible,
                                 // so use barBlurBitmap (not dialogOneShotBitmap).
