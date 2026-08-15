@@ -10,6 +10,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -338,50 +339,42 @@ fun MainEditorScreen(
     }
 
     val swipeGestureModifier = Modifier.pointerInput(leftDrawerState, rightDrawerState) {
-        // Angle-aware drawer swipe: only claim the gesture as horizontal when
-        // |totalX| > |totalY| * 2 — i.e. the finger is moving at least 2× more
-        // sideways than vertically. Pure or near-vertical scrolls never trigger
-        // the drawer even if the finger drifts slightly left or right.
-        awaitPointerEventScope {
-            while (true) {
-                // Wait for a finger-down
-                val down = awaitPointerEvent().changes.firstOrNull() ?: continue
-                if (!down.pressed) continue
+        // Restore detectHorizontalDragGestures (reliable gesture ownership) but
+        // add an angle guard: track vertical movement in onDragStart and abandon
+        // the gesture if it's predominantly vertical. This stops diagonal scrolls
+        // triggering the drawer while keeping reliable left/right swipe detection.
+        var startX   = 0f
+        var startY   = 0f
+        var isVertical = false
+        detectHorizontalDragGestures(
+            onDragStart = { offset ->
+                startX     = offset.x
+                startY     = offset.y
+                isVertical = false
+            },
+            onHorizontalDrag = { change, dragAmount ->
+                // Measure cumulative angle from start; abandon if more vertical than horizontal
+                val dx = change.position.x - startX
+                val dy = change.position.y - startY
+                if (kotlin.math.abs(dy) > kotlin.math.abs(dx) * 1.5f) {
+                    isVertical = true
+                }
+                if (isVertical) return@detectHorizontalDragGestures
 
-                val startX   = down.position.x
-                var totalX   = 0f
-                var totalY   = 0f
-                var claimed  = false
-
-                // Track movement until finger lifts
-                while (true) {
-                    val move = awaitPointerEvent()
-                    val change = move.changes.firstOrNull() ?: break
-                    if (!change.pressed) break
-
-                    totalX += change.position.x - change.previousPosition.x
-                    totalY += change.position.y - change.previousPosition.y
-
-                    // Only act if motion is dominantly horizontal (2:1 ratio)
-                    if (!claimed && kotlin.math.abs(totalX) > kotlin.math.abs(totalY) * 2f) {
-                        val threshold = 36.dp.toPx()
-                        if (totalX > threshold && leftDrawerState.isClosed
-                                && !leftDrawerState.isAnimationRunning
-                                && startX < size.width * 0.5f) {
-                            change.consume()
-                            claimed = true
-                            scope.launch { leftDrawerState.open() }
-                        } else if (totalX < -threshold && rightDrawerState.isClosed
-                                && !rightDrawerState.isAnimationRunning
-                                && startX > size.width * 0.5f) {
-                            change.consume()
-                            claimed = true
-                            scope.launch { rightDrawerState.open() }
-                        }
-                    }
+                val threshold = 48.dp.toPx()
+                if (dx > threshold && leftDrawerState.isClosed
+                        && !leftDrawerState.isAnimationRunning
+                        && startX < size.width * 0.35f) {
+                    change.consume()
+                    scope.launch { leftDrawerState.open() }
+                } else if (dx < -threshold && rightDrawerState.isClosed
+                        && !rightDrawerState.isAnimationRunning
+                        && startX > size.width * 0.65f) {
+                    change.consume()
+                    scope.launch { rightDrawerState.open() }
                 }
             }
-        }
+        )
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -1409,39 +1402,6 @@ fun MainEditorScreen(
                                     val hasBgImage = !activeTheme?.backgroundImageUri.isNullOrEmpty()
 
                                     Box(modifier = Modifier.fillMaxSize()) {
-                                    // Gesture wrapper: AndroidView is a child so PointerEventPass.Initial
-                                    // fires here BEFORE the editor sees the touch. Double-taps are
-                                    // consumed (blocking the editor); single taps pass through normally.
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .pointerInput(Unit) {
-                                                val doubleTapTimeout = viewConfiguration.doubleTapTimeoutMillis
-                                                val doubleTapMinTime = viewConfiguration.doubleTapMinTimeMillis
-                                                awaitPointerEventScope {
-                                                    var lastTapTime = 0L
-                                                    while (true) {
-                                                        // Only act on finger-down transitions at Initial pass.
-                                                        // MOVE and UP events are never touched here so Sora's
-                                                        // vertical scroll gesture is never competed with.
-                                                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                                                        val down = event.changes.firstOrNull() ?: continue
-                                                        if (!down.pressed || down.previousPressed) continue
-                                                        val now = System.currentTimeMillis()
-                                                        val diff = now - lastTapTime
-                                                        if (diff in doubleTapMinTime..doubleTapTimeout) {
-                                                            // Double tap — consume and toggle zen
-                                                            down.consume()
-                                                            editorVm.toggleZen()
-                                                            lastTapTime = 0L
-                                                        } else {
-                                                            // Single tap — don't consume, let it reach the editor
-                                                            lastTapTime = now
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                    ) {
                                     // ── Sora CodeEditor ───────────────────────────────────────
                                     // High-performance View-based editor. Content loading and
                                     // ViewModel wiring live in the LaunchedEffects above.
@@ -1558,27 +1518,46 @@ fun MainEditorScreen(
                                                     arrayOf(fillDrawable, strokeOverlay)
                                                 )
 
-                                                // EditorTextActionWindow doesn't expose popupWindow publicly.
-                                                // Access it via reflection — standard pattern for styling
-                                                // system-owned PopupWindows without replacing their content.
+                                                // EditorTextActionWindow wraps a PopupWindow internally.
+                                                // Walk the class hierarchy looking for any field that holds
+                                                // a PopupWindow instance — field name varies by Sora version.
                                                 try {
                                                     val actionWindow = editor.getComponent(
                                                         io.github.rosemoe.sora.widget.component.EditorTextActionWindow::class.java
                                                     )
-                                                    val field = actionWindow.javaClass.superclass
-                                                        ?.getDeclaredField("popup")
-                                                        ?: actionWindow.javaClass.getDeclaredField("popup")
-                                                    field.isAccessible = true
-                                                    val popup = field.get(actionWindow) as? android.widget.PopupWindow
+                                                    var popup: android.widget.PopupWindow? = null
+                                                    var cls: Class<*>? = actionWindow.javaClass
+                                                    outer@ while (cls != null && cls != Any::class.java) {
+                                                        for (field in cls.declaredFields) {
+                                                            if (android.widget.PopupWindow::class.java
+                                                                    .isAssignableFrom(field.type)) {
+                                                                field.isAccessible = true
+                                                                popup = field.get(actionWindow)
+                                                                    as? android.widget.PopupWindow
+                                                                break@outer
+                                                            }
+                                                        }
+                                                        cls = cls.superclass
+                                                    }
                                                     popup?.setBackgroundDrawable(popupBackground)
                                                 } catch (_: Exception) {
                                                     // Reflection failed — skip styling, no crash
                                                 }
                                             }
                                         },
-                                        modifier = Modifier.fillMaxSize()
+                                        // Double-tap to toggle zen mode.
+                                        // detectTapGestures runs at Main pass — after Sora has
+                                        // already processed the touch — so it never blocks scroll
+                                        // or any other Sora gesture.
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .pointerInput(Unit) {
+                                                detectTapGestures(
+                                                    onDoubleTap = { editorVm.toggleZen() }
+                                                )
+                                            }
                                     )
-                                    } // end gesture-detection Box
+                                    } // end editor Box
 
                                 // Floating Word Count Pill + Zen FAB — always visible,
                                 // so use barBlurBitmap (not dialogOneShotBitmap).
