@@ -406,12 +406,10 @@ fun MainEditorScreen(
                             }
                         }
                     } else {
-                        // First tap — record and drain without consuming
+                        // First tap — just record it, do NOT drain.
+                        // Releasing immediately lets all events (scroll, drag,
+                        // selection) pass through to Sora / drawers untouched.
                         pendingTap = PendingTap(startX, startY, touchTime)
-                        while (true) {
-                            val ev = awaitPointerEvent(PointerEventPass.Initial)
-                            if (ev.changes.none { it.pressed }) break
-                        }
                     }
                 }
             }
