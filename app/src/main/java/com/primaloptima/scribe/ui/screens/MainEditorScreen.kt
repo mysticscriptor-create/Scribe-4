@@ -350,206 +350,67 @@ fun MainEditorScreen(
         BackHandler { scope.launch { rightDrawerState.close() } }
     }
 
-    // ── Unified Gesture Router ────────────────────────────────────────────────
-    // Single gatekeeper that sees every touch first (Initial pass), decides
-    // the user's intent at the slop boundary, then either:
-    //   • Consumes → handles drawer open or double-tap zen toggle
-    //   • Does not consume → Sora / LazyColumn get the full event stream
-    //
-    // Rules:
-    //   1. Direction locked at first 18dp of movement. Never re-evaluated.
-    //   2. Vertical lock → router abandons the pointer. Sora owns it fully.
-    //   3. Horizontal from edge (<20dp) → consume → open drawer.
-    //   4. Horizontal from center → don't consume → Sora handles selection.
-    //   5. Double-tap: second tap DOWN consumed in Initial pass to block
-    //      Sora's own word-select, then zen toggles on UP.
-    //   6. Both drawers must be closed before a drawer swipe is accepted.
-    //   7. Non-edge touches: drain remaining events without consuming so
-    //      awaitFirstDown never re-fires on the same stale DOWN event.
+    // ── Double-tap → Zen toggle ───────────────────────────────────────────────
+    // Minimal gesture interceptor: only watches for a double-tap pattern and
+    // consumes it before Sora's own double-tap word-select fires.
+    // Everything else (drawer swipes, scroll, selection) is untouched and
+    // handled natively by ModalNavigationDrawer / Sora respectively.
     Box(modifier = Modifier
         .fillMaxSize()
-        .pointerInput(leftDrawerState, rightDrawerState) {
-            // Edge zone: 20dp from each side. Kept tight to avoid overlapping
-            // the word-count pill (~36dp from right edge).
-            val edgeZonePx      = 20.dp.toPx()
-            val slopPx          = 18.dp.toPx()
-            val tapSlopPx       = 16f
-            val drawerTriggerPx = 72.dp.toPx()
-            val doubleTapTimeout  = viewConfiguration.doubleTapTimeoutMillis
-            val doubleTapMinTime  = viewConfiguration.doubleTapMinTimeMillis
+        .pointerInput(Unit) {
+            val tapSlopPx        = 16f
+            val doubleTapTimeout = viewConfiguration.doubleTapTimeoutMillis
+            val doubleTapMinTime = viewConfiguration.doubleTapMinTimeMillis
 
             data class PendingTap(val x: Float, val y: Float, val time: Long)
             var pendingTap: PendingTap? = null
 
             awaitPointerEventScope {
                 while (true) {
-                    // ── Expire stale pending taps ──────────────────────────
-                    // Only checked when a new touch arrives, which is correct —
-                    // we do not need real-time expiry between touches.
-                    val nowExpiry = System.currentTimeMillis()
-                    pendingTap?.let {
-                        if (nowExpiry - it.time > doubleTapTimeout) pendingTap = null
-                    }
-
-                    // ── Await finger down ──────────────────────────────────
-                    // requireUnconsumed = false: see touch even if a child
-                    // already consumed the DOWN (e.g. a button ripple).
-                    // Initial pass: runs before children process the event.
-                    val down = awaitFirstDown(
-                        requireUnconsumed = false,
-                        pass = PointerEventPass.Initial
-                    )
-                    // Capture touch time AFTER awaitFirstDown returns so the
-                    // timestamp reflects the actual moment of touch, not when
-                    // the coroutine loop restarted. (Bug fix: stale `now`.)
+                    // See every DOWN even if a child already consumed it.
+                    // Initial pass so we run before Sora processes the event.
+                    val down      = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     val touchTime = System.currentTimeMillis()
-                    val startX = down.position.x
-                    val startY = down.position.y
+                    val startX    = down.position.x
+                    val startY    = down.position.y
 
-                    // ── Double-tap detection ───────────────────────────────
+                    // Expire stale pending tap
+                    pendingTap?.let { if (touchTime - it.time > doubleTapTimeout) pendingTap = null }
+
                     val isSecondTap = pendingTap?.let { first ->
-                        val dt   = touchTime - first.time
+                        val dt  = touchTime - first.time
                         val dxt = startX - first.x; val dyt = startY - first.y
-                        val dist = kotlin.math.sqrt(dxt * dxt + dyt * dyt)
-                        dt >= doubleTapMinTime && dt <= doubleTapTimeout && dist < tapSlopPx
+                        dt >= doubleTapMinTime && dt <= doubleTapTimeout &&
+                                kotlin.math.sqrt(dxt * dxt + dyt * dyt) < tapSlopPx
                     } ?: false
 
                     if (isSecondTap) {
                         pendingTap = null
-                        // Consume the DOWN immediately in Initial pass so Sora's
-                        // own double-tap word-select does not fire. (Bug fix.)
+                        // Consume DOWN now so Sora's word-select never fires
                         down.consume()
                         var becameDrag = false
 
+                        // Watch the rest of this touch
                         while (true) {
                             val event  = awaitPointerEvent(PointerEventPass.Initial)
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
-
                             if (!change.pressed) {
-                                // Finger lifted — only toggle zen if touch stayed clean
-                                if (!becameDrag) {
-                                    change.consume()
-                                    editorVm.toggleZen()
-                                }
+                                if (!becameDrag) { change.consume(); editorVm.toggleZen() }
                                 break
                             }
-
                             val cdx = change.position.x - startX
                             val cdy = change.position.y - startY
-                            val dist = kotlin.math.sqrt(cdx * cdx + cdy * cdy)
-                            if (dist > tapSlopPx) {
-                                // Second tap turned into a drag — cancel zen, release events
+                            if (kotlin.math.sqrt(cdx * cdx + cdy * cdy) > tapSlopPx) {
                                 becameDrag = true
+                                // Don't consume — let Sora handle the drag
                             }
-                            // If dragging, do NOT consume — let Sora handle it
                         }
-                        continue
-                    }
-
-                    // ── Normal gesture: determine intent at slop ───────────
-                    val isLeftEdge  = startX < edgeZonePx
-                    val isRightEdge = startX > size.width - edgeZonePx
-
-                    // Non-edge touch: drain the pointer without consuming so
-                    // Sora / LazyColumn get the full event stream. The drain
-                    // prevents awaitFirstDown from immediately re-firing on
-                    // the same stale DOWN event. (Bug fix: `continue` alone
-                    // would cause an infinite tight loop.)
-                    if (!isLeftEdge && !isRightEdge) {
+                    } else {
+                        // First tap — record and drain without consuming
                         pendingTap = PendingTap(startX, startY, touchTime)
-                        do {
+                        while (true) {
                             val ev = awaitPointerEvent(PointerEventPass.Initial)
-                            val lifted = ev.changes.none { it.pressed }
-                            if (lifted) break
-                            // Check if moved enough to disqualify as a clean tap
-                            val moved = ev.changes.firstOrNull { it.id == down.id }
-                            if (moved != null) {
-                                val mdx = moved.position.x - startX
-                                val mdy = moved.position.y - startY
-                                val dist = kotlin.math.sqrt(mdx * mdx + mdy * mdy)
-                                if (dist > tapSlopPx) {
-                                    // Became a drag — not a tap, clear pending
-                                    pendingTap = null
-                                }
-                            }
-                        } while (true)
-                        continue
-                    }
-
-                    // ── Edge touch: wait for direction lock ────────────────
-                    var lockedDir: String? = null   // "vertical" or "horizontal"
-                    var hasExitedSlop = false
-                    var drawerFired   = false
-
-                    while (true) {
-                        val event  = awaitPointerEvent(PointerEventPass.Initial)
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-
-                        if (!change.pressed) {
-                            // Finger lifted without crossing slop = clean tap from edge
-                            if (!hasExitedSlop) {
-                                pendingTap = PendingTap(startX, startY, touchTime)
-                            }
-                            break
-                        }
-
-                        val dx   = change.position.x - startX
-                        val dy   = change.position.y - startY
-                        val dist = kotlin.math.sqrt(dx * dx + dy * dy)
-
-                        // Lock direction once at the slop boundary — never re-evaluated
-                        if (!hasExitedSlop && dist > slopPx) {
-                            hasExitedSlop = true
-                            val adx = if (dx < 0f) -dx else dx
-                            val ady = if (dy < 0f) -dy else dy
-                            lockedDir = when {
-                                ady > adx * 1.3f -> "vertical"
-                                adx > ady * 1.3f -> "horizontal"
-                                else             -> "vertical"  // ambiguous → safe default
-                            }
-                        }
-
-                        if (hasExitedSlop) {
-                            when (lockedDir) {
-                                "vertical" -> {
-                                    // Sora / LazyColumn own this gesture — do not consume
-                                    break
-                                }
-                                "horizontal" -> {
-                                    val towardCenter  = (isLeftEdge  && dx > 0f) || (isRightEdge && dx < 0f)
-                                    val towardEdge    = (isLeftEdge  && dx < 0f) || (isRightEdge && dx > 0f)
-                                    val bothClosed    = leftDrawerState.isClosed && rightDrawerState.isClosed
-                                    val leftOpen      = leftDrawerState.isOpen
-                                    val rightOpen     = rightDrawerState.isOpen
-
-                                    val absDx = if (dx < 0f) -dx else dx
-
-                                    if (towardCenter && bothClosed) {
-                                        // Open gesture — swipe in from edge while both drawers closed
-                                        change.consume()
-                                        if (!drawerFired && absDx > drawerTriggerPx) {
-                                            drawerFired = true
-                                            scope.launch {
-                                                if (isLeftEdge) leftDrawerState.open()
-                                                else rightDrawerState.open()
-                                            }
-                                        }
-                                    } else if (towardEdge && (leftOpen || rightOpen)) {
-                                        // Close gesture — swipe back toward the edge the drawer came from
-                                        change.consume()
-                                        if (!drawerFired && absDx > drawerTriggerPx) {
-                                            drawerFired = true
-                                            scope.launch {
-                                                if (leftOpen) leftDrawerState.close()
-                                                else rightDrawerState.close()
-                                            }
-                                        }
-                                    } else {
-                                        // Not a drawer swipe — Sora handles cursor / selection.
-                                        break
-                                    }
-                                }
-                            }
+                            if (ev.changes.none { it.pressed }) break
                         }
                     }
                 }
@@ -587,7 +448,7 @@ fun MainEditorScreen(
 
         ModalNavigationDrawer(
             drawerState = leftDrawerState,
-            gesturesEnabled = false, // Unified gesture router handles all swipes
+            gesturesEnabled = true,
             drawerContent = {
                 CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap) {
                 ModalDrawerSheet(
@@ -997,7 +858,7 @@ fun MainEditorScreen(
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
                 ModalNavigationDrawer(
                     drawerState = rightDrawerState,
-                    gesturesEnabled = false, // Unified gesture router handles all swipes
+                    gesturesEnabled = true,
                     drawerContent = {
                         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                         CompositionLocalProvider(LocalOneShotBitmap provides rightOneShotBitmap) {
