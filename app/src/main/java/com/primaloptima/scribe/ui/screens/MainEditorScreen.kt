@@ -60,6 +60,7 @@ import dev.chrisbanes.haze.hazeSource
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -395,7 +396,8 @@ fun MainEditorScreen(
                     // ── Double-tap detection ───────────────────────────────
                     val isSecondTap = pendingTap?.let { first ->
                         val dt   = touchTime - first.time
-                        val dist = kotlin.math.hypot(startX - first.x, startY - first.y)
+                        val dxt = startX - first.x; val dyt = startY - first.y
+                        val dist = kotlin.math.sqrt(dxt * dxt + dyt * dyt)
                         dt >= doubleTapMinTime && dt <= doubleTapTimeout && dist < tapSlopPx
                     } ?: false
 
@@ -419,10 +421,9 @@ fun MainEditorScreen(
                                 break
                             }
 
-                            val dist = kotlin.math.hypot(
-                                change.position.x - startX,
-                                change.position.y - startY
-                            )
+                            val cdx = change.position.x - startX
+                            val cdy = change.position.y - startY
+                            val dist = kotlin.math.sqrt(cdx * cdx + cdy * cdy)
                             if (dist > tapSlopPx) {
                                 // Second tap turned into a drag — cancel zen, release events
                                 becameDrag = true
@@ -450,10 +451,9 @@ fun MainEditorScreen(
                             // Check if moved enough to disqualify as a clean tap
                             val moved = ev.changes.firstOrNull { it.id == down.id }
                             if (moved != null) {
-                                val dist = kotlin.math.hypot(
-                                    moved.position.x - startX,
-                                    moved.position.y - startY
-                                )
+                                val mdx = moved.position.x - startX
+                                val mdy = moved.position.y - startY
+                                val dist = kotlin.math.sqrt(mdx * mdx + mdy * mdy)
                                 if (dist > tapSlopPx) {
                                     // Became a drag — not a tap, clear pending
                                     pendingTap = null
@@ -482,13 +482,13 @@ fun MainEditorScreen(
 
                         val dx   = change.position.x - startX
                         val dy   = change.position.y - startY
-                        val dist = kotlin.math.hypot(dx, dy)
+                        val dist = kotlin.math.sqrt(dx * dx + dy * dy)
 
                         // Lock direction once at the slop boundary — never re-evaluated
                         if (!hasExitedSlop && dist > slopPx) {
                             hasExitedSlop = true
-                            val adx = kotlin.math.abs(dx)
-                            val ady = kotlin.math.abs(dy)
+                            val adx = if (dx < 0f) -dx else dx
+                            val ady = if (dy < 0f) -dy else dy
                             lockedDir = when {
                                 ady > adx * 1.3f -> "vertical"
                                 adx > ady * 1.3f -> "horizontal"
@@ -503,14 +503,15 @@ fun MainEditorScreen(
                                     break
                                 }
                                 "horizontal" -> {
-                                    val towardCenter = (isLeftEdge && dx > 0) || (isRightEdge && dx < 0)
+                                    val towardCenter = (isLeftEdge && dx > 0f) || (isRightEdge && dx < 0f)
                                     val bothClosed   = leftDrawerState.isClosed && rightDrawerState.isClosed
 
                                     if (towardCenter && bothClosed) {
                                         // Consume the event — drawer is taking over
                                         change.consume()
 
-                                        if (!drawerFired && kotlin.math.abs(dx) > drawerTriggerPx) {
+                                        val absDx = if (dx < 0f) -dx else dx
+                                        if (!drawerFired && absDx > drawerTriggerPx) {
                                             drawerFired = true
                                             scope.launch {
                                                 if (isLeftEdge) leftDrawerState.open()
