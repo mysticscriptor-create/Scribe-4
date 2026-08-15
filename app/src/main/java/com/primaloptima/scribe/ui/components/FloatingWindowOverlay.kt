@@ -4,9 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Maximize
@@ -24,14 +22,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.primaloptima.scribe.data.Note
+import com.primaloptima.scribe.ui.theme.ScribeColorScheme
+import com.primaloptima.scribe.util.model.AppTheme
 import com.primaloptima.scribe.util.model.FloatingWindow
+import io.github.rosemoe.sora.widget.CodeEditor
 import kotlin.math.roundToInt
 
 @Composable
 fun FloatingWindowOverlay(
     floatingWindows: List<FloatingWindow>,
     notes: List<Note>,
+    activeTheme: AppTheme?,
     onCloseWindow: (String) -> Unit,
     onToggleCollapse: (String) -> Unit,
     onMoveWindow: (String, Float, Float) -> Unit,
@@ -44,6 +47,7 @@ fun FloatingWindowOverlay(
                 FloatingWindowItem(
                     windowState = windowState,
                     note = note,
+                    activeTheme = activeTheme,
                     onClose = { onCloseWindow(windowState.id) },
                     onToggleCollapse = { onToggleCollapse(windowState.id) },
                     onMove = { dx, dy ->
@@ -59,6 +63,7 @@ fun FloatingWindowOverlay(
 private fun FloatingWindowItem(
     windowState: FloatingWindow,
     note: Note,
+    activeTheme: AppTheme?,
     onClose: () -> Unit,
     onToggleCollapse: () -> Unit,
     onMove: (Float, Float) -> Unit
@@ -137,20 +142,29 @@ private fun FloatingWindowItem(
             }
 
             if (!windowState.collapsed) {
-                Box(
+                // Read-only Sora viewer — matches the main editor's rendering
+                // without syntax highlighting or line numbers.
+                AndroidView(
                     modifier = Modifier
                         .heightIn(min = 100.dp, max = 220.dp)
-                        .fillMaxWidth()
-                        .padding(12.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(
-                        text = note.content.ifBlank { "Empty note" },
-                        fontSize = 12.sp,
-                        lineHeight = 18.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
+                        .fillMaxWidth(),
+                    factory = { ctx ->
+                        CodeEditor(ctx).apply {
+                            isEditable             = false
+                            isLineNumberEnabled    = false
+                            isHighlightCurrentLine = false
+                            isWordwrap             = true
+                            setText(note.content.ifBlank { "Empty note" })
+                            activeTheme?.let { colorScheme = ScribeColorScheme(it) }
+                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        }
+                    },
+                    update = { editor ->
+                        val incoming = note.content.ifBlank { "Empty note" }
+                        if (editor.text.toString() != incoming) editor.setText(incoming)
+                        activeTheme?.let { editor.colorScheme = ScribeColorScheme(it) }
+                    }
+                )
             }
         }
     }

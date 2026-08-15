@@ -968,28 +968,34 @@ fun MainEditorScreen(
                                                 }
                                             } else {
                                                 Column(modifier = Modifier.fillMaxSize()) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .weight(1f)
-                                                            .fillMaxWidth()
-                                                            .verticalScroll(rememberScrollState())
-                                                            .padding(12.dp)
-                                                    ) {
-                                                        Column {
-                                                            Text(
-                                                                currentTopNote.name,
-                                                                fontWeight = FontWeight.Bold,
-                                                                fontSize = 15.sp,
-                                                                color = MaterialTheme.colorScheme.primary
-                                                            )
-                                                            Spacer(modifier = Modifier.height(6.dp))
-                                                            Text(
-                                                                currentTopNote.content.ifBlank { "(Empty note content)" },
-                                                                fontSize = 12.sp,
-                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                            )
+                                                    // Note title
+                                                    Text(
+                                                        currentTopNote.name,
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 15.sp,
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
+                                                    )
+                                                    // Read-only Sora viewer
+                                                    AndroidView(
+                                                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                                                        factory = { ctx ->
+                                                            CodeEditor(ctx).apply {
+                                                                isEditable           = false
+                                                                isLineNumberEnabled  = false
+                                                                isHighlightCurrentLine = false
+                                                                isWordwrap           = true
+                                                                setText(currentTopNote.content.ifBlank { "(Empty note content)" })
+                                                                activeTheme?.let { colorScheme = ScribeColorScheme(it) }
+                                                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                                                            }
+                                                        },
+                                                        update = { editor ->
+                                                            val incoming = currentTopNote.content.ifBlank { "(Empty note content)" }
+                                                            if (editor.text.toString() != incoming) editor.setText(incoming)
+                                                            activeTheme?.let { editor.colorScheme = ScribeColorScheme(it) }
                                                         }
-                                                    }
+                                                    )
                                                 }
 
                                                 Row(
@@ -1066,28 +1072,34 @@ fun MainEditorScreen(
                                                 }
                                             } else {
                                                 Column(modifier = Modifier.fillMaxSize()) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .weight(1f)
-                                                            .fillMaxWidth()
-                                                            .verticalScroll(rememberScrollState())
-                                                            .padding(12.dp)
-                                                    ) {
-                                                        Column {
-                                                            Text(
-                                                                currentBottomNote.name,
-                                                                fontWeight = FontWeight.Bold,
-                                                                fontSize = 15.sp,
-                                                                color = MaterialTheme.colorScheme.primary
-                                                            )
-                                                            Spacer(modifier = Modifier.height(6.dp))
-                                                            Text(
-                                                                currentBottomNote.content.ifBlank { "(Empty note content)" },
-                                                                fontSize = 12.sp,
-                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                            )
+                                                    // Note title
+                                                    Text(
+                                                        currentBottomNote.name,
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 15.sp,
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
+                                                    )
+                                                    // Read-only Sora viewer
+                                                    AndroidView(
+                                                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                                                        factory = { ctx ->
+                                                            CodeEditor(ctx).apply {
+                                                                isEditable           = false
+                                                                isLineNumberEnabled  = false
+                                                                isHighlightCurrentLine = false
+                                                                isWordwrap           = true
+                                                                setText(currentBottomNote.content.ifBlank { "(Empty note content)" })
+                                                                activeTheme?.let { colorScheme = ScribeColorScheme(it) }
+                                                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                                                            }
+                                                        },
+                                                        update = { editor ->
+                                                            val incoming = currentBottomNote.content.ifBlank { "(Empty note content)" }
+                                                            if (editor.text.toString() != incoming) editor.setText(incoming)
+                                                            activeTheme?.let { editor.colorScheme = ScribeColorScheme(it) }
                                                         }
-                                                    }
+                                                    )
                                                 }
 
                                                 Row(
@@ -1727,6 +1739,7 @@ fun MainEditorScreen(
         FloatingWindowOverlay(
             floatingWindows = floatingWindows,
             notes = mappedNotes,
+            activeTheme = activeTheme,
             onCloseWindow = { id -> editorVm.closeFloatingWindow(id) },
             onToggleCollapse = { id -> editorVm.toggleCollapseFloatingWindow(id) },
             onMoveWindow = { id, x, y -> editorVm.moveFloatingWindow(id, x, y) }
