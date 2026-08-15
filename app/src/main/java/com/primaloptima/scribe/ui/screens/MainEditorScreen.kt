@@ -1557,7 +1557,6 @@ fun MainEditorScreen(
                                                 )
                                             }
                                     )
-                                    } // end editor Box
 
                                 // Floating Word Count Pill + Zen FAB — always visible,
                                 // so use barBlurBitmap (not dialogOneShotBitmap).
