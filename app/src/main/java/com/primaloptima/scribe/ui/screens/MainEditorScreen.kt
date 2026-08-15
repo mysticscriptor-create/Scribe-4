@@ -1558,9 +1558,22 @@ fun MainEditorScreen(
                                                     arrayOf(fillDrawable, strokeOverlay)
                                                 )
 
-                                                editor.getComponent(
-                                                    io.github.rosemoe.sora.widget.component.EditorTextActionWindow::class.java
-                                                ).popupWindow.setBackgroundDrawable(popupBackground)
+                                                // EditorTextActionWindow doesn't expose popupWindow publicly.
+                                                // Access it via reflection — standard pattern for styling
+                                                // system-owned PopupWindows without replacing their content.
+                                                try {
+                                                    val actionWindow = editor.getComponent(
+                                                        io.github.rosemoe.sora.widget.component.EditorTextActionWindow::class.java
+                                                    )
+                                                    val field = actionWindow.javaClass.superclass
+                                                        ?.getDeclaredField("popup")
+                                                        ?: actionWindow.javaClass.getDeclaredField("popup")
+                                                    field.isAccessible = true
+                                                    val popup = field.get(actionWindow) as? android.widget.PopupWindow
+                                                    popup?.setBackgroundDrawable(popupBackground)
+                                                } catch (_: Exception) {
+                                                    // Reflection failed — skip styling, no crash
+                                                }
                                             }
                                         },
                                         modifier = Modifier.fillMaxSize()
