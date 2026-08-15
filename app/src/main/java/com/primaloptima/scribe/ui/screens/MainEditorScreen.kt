@@ -60,6 +60,7 @@ import dev.chrisbanes.haze.hazeSource
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -337,6 +338,18 @@ fun MainEditorScreen(
         noteListVm.connectExternalFolder(uri, name)
     }
 
+    // ── Drawer back-press handlers ────────────────────────────────────────────
+    // Must be declared outside (and before) the Box so they sit higher in the
+    // composition than any BackHandler inside the drawer content (e.g. FAB menu).
+    // Using an `if` block rather than `enabled` keeps the handler fully out of
+    // the composition when not needed, avoiding stale-callback priority issues.
+    if (leftDrawerState.isOpen) {
+        BackHandler { scope.launch { leftDrawerState.close() } }
+    }
+    if (rightDrawerState.isOpen) {
+        BackHandler { scope.launch { rightDrawerState.close() } }
+    }
+
     // ── Unified Gesture Router ────────────────────────────────────────────────
     // Single gatekeeper that sees every touch first (Initial pass), decides
     // the user's intent at the slop boundary, then either:
@@ -503,14 +516,17 @@ fun MainEditorScreen(
                                     break
                                 }
                                 "horizontal" -> {
-                                    val towardCenter = (isLeftEdge && dx > 0f) || (isRightEdge && dx < 0f)
-                                    val bothClosed   = leftDrawerState.isClosed && rightDrawerState.isClosed
+                                    val towardCenter  = (isLeftEdge  && dx > 0f) || (isRightEdge && dx < 0f)
+                                    val towardEdge    = (isLeftEdge  && dx < 0f) || (isRightEdge && dx > 0f)
+                                    val bothClosed    = leftDrawerState.isClosed && rightDrawerState.isClosed
+                                    val leftOpen      = leftDrawerState.isOpen
+                                    val rightOpen     = rightDrawerState.isOpen
+
+                                    val absDx = if (dx < 0f) -dx else dx
 
                                     if (towardCenter && bothClosed) {
-                                        // Consume the event — drawer is taking over
+                                        // Open gesture — swipe in from edge while both drawers closed
                                         change.consume()
-
-                                        val absDx = if (dx < 0f) -dx else dx
                                         if (!drawerFired && absDx > drawerTriggerPx) {
                                             drawerFired = true
                                             scope.launch {
@@ -518,10 +534,18 @@ fun MainEditorScreen(
                                                 else rightDrawerState.open()
                                             }
                                         }
+                                    } else if (towardEdge && (leftOpen || rightOpen)) {
+                                        // Close gesture — swipe back toward the edge the drawer came from
+                                        change.consume()
+                                        if (!drawerFired && absDx > drawerTriggerPx) {
+                                            drawerFired = true
+                                            scope.launch {
+                                                if (leftOpen) leftDrawerState.close()
+                                                else rightDrawerState.close()
+                                            }
+                                        }
                                     } else {
-                                        // Horizontal but not a valid drawer swipe
-                                        // (wrong direction, or a drawer is already open).
-                                        // Do not consume — Sora handles cursor / selection.
+                                        // Not a drawer swipe — Sora handles cursor / selection.
                                         break
                                     }
                                 }
