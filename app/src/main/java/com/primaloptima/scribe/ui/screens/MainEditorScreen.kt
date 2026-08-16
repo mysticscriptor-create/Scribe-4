@@ -61,7 +61,8 @@ import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -117,24 +118,19 @@ fun MainEditorScreen(
     val scope = rememberCoroutineScope()
 
     val leftDrawerState  = rememberDrawerState(initialValue = DrawerValue.Closed)
-    val rightDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    // Snap both drawers to Closed on first composition — prevents the 1-frame flash
+    // Snap left drawer to Closed on first composition — prevents the 1-frame flash
     // visible during NavDisplay slide transitions (drawer Animatables initialise at
     // offset 0 before clamping to their off-screen closed positions).
     LaunchedEffect(Unit) {
         leftDrawerState.snapTo(DrawerValue.Closed)
-        rightDrawerState.snapTo(DrawerValue.Closed)
     }
 
     // One-shot blurred captures for pre-API-31 frosted glass.
-    // Captured once when each drawer starts opening; cleared when it closes.
+    // Captured once when left drawer starts opening; cleared when it closes.
     val view = LocalView.current
     val blurRadiusPx = com.primaloptima.scribe.ui.theme.LocalFrostedBlurRadius.current.toInt().coerceIn(1, 25)
-    var leftOneShotBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var rightOneShotBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    // Track whether we've already captured for the current open gesture
-    var leftCaptured by remember { mutableStateOf(false) }
-    var rightCaptured by remember { mutableStateOf(false) }
+    var leftOneShotBitmap  by remember { mutableStateOf<Bitmap?>(null) }
+    var leftCaptured       by remember { mutableStateOf(false) }
     var dialogOneShotBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     // Persistent blur bitmap for always-visible bars and FABs on Android 10.
@@ -172,19 +168,6 @@ fun MainEditorScreen(
                 leftOneShotBitmap = null
             }
         }
-        LaunchedEffect(rightDrawerState.currentValue, rightDrawerState.targetValue) {
-            if (rightDrawerState.targetValue == DrawerValue.Open && !rightCaptured) {
-                rightCaptured = true
-                val rawRight = BitmapBlur.captureOnly(view)  // must stay on Main thread
-                rightOneShotBitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    rawRight?.let { BitmapBlur.blurBitmap(it, radius = blurRadiusPx) }
-                }
-            } else if (rightDrawerState.currentValue == DrawerValue.Closed &&
-                       rightDrawerState.targetValue == DrawerValue.Closed) {
-                rightCaptured = false
-                rightOneShotBitmap = null
-            }
-        }
 
     }
 
@@ -220,6 +203,9 @@ fun MainEditorScreen(
     var rightDrawerTab by remember { mutableIntStateOf(0) } // 0: Pinned, 1: Outline
     var leftPanelTab by remember { mutableIntStateOf(0) } // 0: Files, 1: World Sheet
     var leftDrawerMode by remember { mutableStateOf("Current") } // "Current" or "Books"
+
+    // Pager: page 0 = editor, page 1 = right panel (pinned notes + outline)
+    val pagerState = rememberPagerState(pageCount = { 2 })
     var leftSearchQuery by remember { mutableStateOf("") }
 
     var showFindBar by remember { mutableStateOf(false) }
@@ -346,8 +332,8 @@ fun MainEditorScreen(
     if (leftDrawerState.isOpen) {
         BackHandler { scope.launch { leftDrawerState.close() } }
     }
-    if (rightDrawerState.isOpen) {
-        BackHandler { scope.launch { rightDrawerState.close() } }
+    if (pagerState.currentPage == 1) {
+        BackHandler { scope.launch { pagerState.animateScrollToPage(0) } }
     }
 
     // ── Gesture Router: double-tap zen + edge drawer open ────────────────────
@@ -360,7 +346,7 @@ fun MainEditorScreen(
     // Close is handled by: scrim tap (built-in) + BackHandler above.
     Box(modifier = Modifier
         .fillMaxSize()
-        .pointerInput(leftDrawerState, rightDrawerState) {
+        .pointerInput(leftDrawerState, pagerState) {
             val edgeZonePx       = 20.dp.toPx()
             val slopPx           = 18.dp.toPx()
             val tapSlopPx        = 16f
@@ -445,7 +431,7 @@ fun MainEditorScreen(
                                 drawerFired = true
                                 scope.launch {
                                     if (isLeftEdge) leftDrawerState.open()
-                                    else rightDrawerState.open()
+                                    else pagerState.animateScrollToPage(1)
                                 }
                             }
                         }
@@ -892,36 +878,18 @@ fun MainEditorScreen(
                 } // end CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap)
             }
         ) {
-            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                ModalNavigationDrawer(
-                    drawerState = rightDrawerState,
-                    gesturesEnabled = false,
-                    drawerContent = {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+                userScrollEnabled = false // gesture router controls paging exclusively
+            ) { page ->
+                when (page) {
+                    0 -> {
+                        // ── Page 0: Editor ────────────────────────────────
+                        val hazeState = LocalHazeState.current
+
                         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                        CompositionLocalProvider(LocalOneShotBitmap provides rightOneShotBitmap) {
-                            ModalDrawerSheet(
-                                drawerContainerColor = Color.Transparent,
-                                modifier = Modifier
-                                    .width(320.dp)
-                                    .frostedPanel(LocalHazeState.current)
-                            ) {
-                                Spacer(modifier = Modifier.height(12.dp))
-                                PrimaryTabRow(selectedTabIndex = rightDrawerTab) {
-                                    Tab(
-                                        selected = rightDrawerTab == 0,
-                                        onClick = { rightDrawerTab = 0 },
-                                        text = { Text("Pinned Notes", fontWeight = FontWeight.Bold) }
-                                    )
-                                    Tab(
-                                        selected = rightDrawerTab == 1,
-                                        onClick = { rightDrawerTab = 1 },
-                                        text = { Text("Outline (${outline.size})", fontWeight = FontWeight.Bold) }
-                                    )
-                                }
-
-                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                                if (rightDrawerTab == 0) {
+                            Scaffold(
                                     // Split Screen Pinned Notes View (Top & Bottom)
                                     Column(
                                         modifier = Modifier
@@ -1170,7 +1138,7 @@ fun MainEditorScreen(
                                                                     editor.ensurePositionVisible(line, col)
                                                                 }
                                                             }
-                                                            scope.launch { rightDrawerState.close() }
+                                                            scope.launch { pagerState.animateScrollToPage(0) }
                                                         },
                                                     shape = RoundedCornerShape(8.dp),
                                                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -1205,15 +1173,34 @@ fun MainEditorScreen(
                                         }
                                     }
                                 }
+                                }
                             }
                         }
-                        } // end CompositionLocalProvider(LocalOneShotBitmap provides rightOneShotBitmap)
                     }
-                ) {
-                    val hazeState = LocalHazeState.current
-
-                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                        Scaffold(
+                    // ── Page 1: Right Panel (Pinned Notes + Outline) ──────
+                    1 -> {
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .frostedPanel(LocalHazeState.current)
+                        ) {
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                PrimaryTabRow(selectedTabIndex = rightDrawerTab) {
+                                    Tab(
+                                        selected = rightDrawerTab == 0,
+                                        onClick = { rightDrawerTab = 0 },
+                                        text = { Text("Pinned Notes", fontWeight = FontWeight.Bold) }
+                                    )
+                                    Tab(
+                                        selected = rightDrawerTab == 1,
+                                        onClick = { rightDrawerTab = 1 },
+                                        text = { Text("Outline (${outline.size})", fontWeight = FontWeight.Bold) }
+                                    )
+                                }
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                                if (rightDrawerTab == 0) {
                             containerColor = Color.Transparent,
                             modifier = Modifier,
                             contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.ime),
@@ -1251,7 +1238,7 @@ fun MainEditorScreen(
                                                 )
                                             },
                                             actions = {
-                                                IconButton(onClick = { scope.launch { rightDrawerState.open() } }) {
+                                                IconButton(onClick = { scope.launch { pagerState.animateScrollToPage(1) } }) {
                                                     Icon(Icons.Default.Dock, contentDescription = "Outline & Pinned Notes")
                                                 }
                                                 IconButton(onClick = { showFindBar = !showFindBar }) {
@@ -1827,7 +1814,15 @@ fun MainEditorScreen(
         }
         } // end CompositionLocalProvider(LocalOneShotBitmap provides dialogOneShotBitmap)
     }
-        } // end ModalNavigationDrawer
+                        } // end CompositionLocalProvider(Ltr) for Scaffold
+                    } // end page 0
+                        } // end if/else rightDrawerTab
+                            } // end Column
+                        } // end Box (right panel)
+                        } // end CompositionLocalProvider(Ltr) for page 1
+                    } // end when(page)
+                } // end HorizontalPager
+        } // end left ModalNavigationDrawer content
     } // end outer Box
 }
 
