@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -438,7 +439,7 @@ fun MainEditorScreen(
         // ── Left vault drawer ─────────────────────────────────────────────────
         ModalNavigationDrawer(
             drawerState    = leftDrawerState,
-            gesturesEnabled = false,
+            gesturesEnabled = !isKeyboardOpenForGesture,
             drawerContent  = {
                 CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap) {
                     ModalDrawerSheet(
@@ -612,7 +613,7 @@ fun MainEditorScreen(
                 HorizontalPager(
                     state                = rightPagerState,
                     modifier             = Modifier.fillMaxSize(),
-                    userScrollEnabled    = false,
+                    userScrollEnabled    = !isKeyboardOpenForGesture,
                     beyondViewportPageCount = 1,
                 ) { page ->
                     when (page) {
@@ -1124,6 +1125,7 @@ private fun RightCompanionPanel(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .safeDrawingPadding()          // keep content clear of status + nav bars
                 .frostedPanel(hazeState)
         ) {
             Column(Modifier.fillMaxSize()) {
@@ -1169,6 +1171,38 @@ private fun RightCompanionPanel(
                                     if (splitHorizontal) maxWidth.toPx() else maxHeight.toPx()
                                 }
 
+                                // Accumulated drag for header-based section dragging.
+                                // We accumulate during the drag and act on dragEnd to avoid
+                                // triggering swap/toggle on every tiny movement.
+                                val headerDragThresholdPx = with(density) { 40.dp.toPx() }
+                                var headerDragAccX by remember { mutableFloatStateOf(0f) }
+                                var headerDragAccY by remember { mutableFloatStateOf(0f) }
+
+                                // Shared callbacks for both slot headers
+                                val onTopHeaderDrag: (Float, Float) -> Unit = { dx, dy ->
+                                    headerDragAccX += dx
+                                    headerDragAccY += dy
+                                }
+                                val onBottomHeaderDrag: (Float, Float) -> Unit = { dx, dy ->
+                                    headerDragAccX += dx
+                                    headerDragAccY += dy
+                                }
+                                val onHeaderDragEnd: () -> Unit = {
+                                    val ax = if (headerDragAccX < 0) -headerDragAccX else headerDragAccX
+                                    val ay = if (headerDragAccY < 0) -headerDragAccY else headerDragAccY
+                                    if (ax > headerDragThresholdPx || ay > headerDragThresholdPx) {
+                                        if (ay > ax) {
+                                            // Predominantly vertical → swap top and bottom slots
+                                            onSwapSlots()
+                                        } else {
+                                            // Predominantly horizontal → toggle split orientation
+                                            onToggleSplitLayout()
+                                        }
+                                    }
+                                    headerDragAccX = 0f
+                                    headerDragAccY = 0f
+                                }
+
                                 if (splitHorizontal) {
                                     // ── Side-by-side layout ───────────────────
                                     Row(
@@ -1177,19 +1211,21 @@ private fun RightCompanionPanel(
                                     ) {
                                         // Slot A (left)
                                         PinnedNoteSlot(
-                                            modifier      = Modifier.fillMaxHeight().weight(splitFraction),
-                                            pinnedIds     = pinnedTopNotes,
-                                            pinnedIndex   = pinnedTopIndex,
-                                            allNotes      = allNotes,
-                                            worldEntries  = worldEntries,
-                                            activeTheme   = activeTheme,
-                                            onPrev        = onPrevTop,
-                                            onNext        = onNextTop,
-                                            onSwitch      = onSwitchTop,
-                                            onEdit        = onEditTop,
-                                            onRemove      = onRemoveTop,
-                                            onPick        = onPickTop,
-                                            hazeState     = hazeState,
+                                            modifier        = Modifier.fillMaxHeight().weight(splitFraction),
+                                            pinnedIds       = pinnedTopNotes,
+                                            pinnedIndex     = pinnedTopIndex,
+                                            allNotes        = allNotes,
+                                            worldEntries    = worldEntries,
+                                            activeTheme     = activeTheme,
+                                            onPrev          = onPrevTop,
+                                            onNext          = onNextTop,
+                                            onSwitch        = onSwitchTop,
+                                            onEdit          = onEditTop,
+                                            onRemove        = onRemoveTop,
+                                            onPick          = onPickTop,
+                                            hazeState       = hazeState,
+                                            onHeaderDrag    = onTopHeaderDrag,
+                                            onHeaderDragEnd = onHeaderDragEnd,
                                         )
 
                                         // ── Drag-resizable divider ────────────
@@ -1199,26 +1235,28 @@ private fun RightCompanionPanel(
                                                 splitFraction = (splitFraction + delta / totalPxFloat)
                                                     .coerceIn(0.2f, 0.8f)
                                             },
-                                            onLongPress   = onSwapSlots,
+                                            onSwap        = onSwapSlots,
                                             accentColor   = accentColor,
                                             hazeState     = hazeState,
                                         )
 
                                         // Slot B (right)
                                         PinnedNoteSlot(
-                                            modifier      = Modifier.fillMaxHeight().weight(1f - splitFraction),
-                                            pinnedIds     = pinnedBottomNotes,
-                                            pinnedIndex   = pinnedBottomIndex,
-                                            allNotes      = allNotes,
-                                            worldEntries  = worldEntries,
-                                            activeTheme   = activeTheme,
-                                            onPrev        = onPrevBottom,
-                                            onNext        = onNextBottom,
-                                            onSwitch      = onSwitchBottom,
-                                            onEdit        = onEditBottom,
-                                            onRemove      = onRemoveBottom,
-                                            onPick        = onPickBottom,
-                                            hazeState     = hazeState,
+                                            modifier        = Modifier.fillMaxHeight().weight(1f - splitFraction),
+                                            pinnedIds       = pinnedBottomNotes,
+                                            pinnedIndex     = pinnedBottomIndex,
+                                            allNotes        = allNotes,
+                                            worldEntries    = worldEntries,
+                                            activeTheme     = activeTheme,
+                                            onPrev          = onPrevBottom,
+                                            onNext          = onNextBottom,
+                                            onSwitch        = onSwitchBottom,
+                                            onEdit          = onEditBottom,
+                                            onRemove        = onRemoveBottom,
+                                            onPick          = onPickBottom,
+                                            hazeState       = hazeState,
+                                            onHeaderDrag    = onBottomHeaderDrag,
+                                            onHeaderDragEnd = onHeaderDragEnd,
                                         )
                                     }
                                 } else {
@@ -1229,19 +1267,21 @@ private fun RightCompanionPanel(
                                     ) {
                                         // Slot A (top)
                                         PinnedNoteSlot(
-                                            modifier      = Modifier.fillMaxWidth().weight(splitFraction),
-                                            pinnedIds     = pinnedTopNotes,
-                                            pinnedIndex   = pinnedTopIndex,
-                                            allNotes      = allNotes,
-                                            worldEntries  = worldEntries,
-                                            activeTheme   = activeTheme,
-                                            onPrev        = onPrevTop,
-                                            onNext        = onNextTop,
-                                            onSwitch      = onSwitchTop,
-                                            onEdit        = onEditTop,
-                                            onRemove      = onRemoveTop,
-                                            onPick        = onPickTop,
-                                            hazeState     = hazeState,
+                                            modifier        = Modifier.fillMaxWidth().weight(splitFraction),
+                                            pinnedIds       = pinnedTopNotes,
+                                            pinnedIndex     = pinnedTopIndex,
+                                            allNotes        = allNotes,
+                                            worldEntries    = worldEntries,
+                                            activeTheme     = activeTheme,
+                                            onPrev          = onPrevTop,
+                                            onNext          = onNextTop,
+                                            onSwitch        = onSwitchTop,
+                                            onEdit          = onEditTop,
+                                            onRemove        = onRemoveTop,
+                                            onPick          = onPickTop,
+                                            hazeState       = hazeState,
+                                            onHeaderDrag    = onTopHeaderDrag,
+                                            onHeaderDragEnd = onHeaderDragEnd,
                                         )
 
                                         // ── Drag-resizable divider ────────────
@@ -1251,26 +1291,28 @@ private fun RightCompanionPanel(
                                                 splitFraction = (splitFraction + delta / totalPxFloat)
                                                     .coerceIn(0.2f, 0.8f)
                                             },
-                                            onLongPress   = onSwapSlots,
+                                            onSwap        = onSwapSlots,
                                             accentColor   = accentColor,
                                             hazeState     = hazeState,
                                         )
 
                                         // Slot B (bottom)
                                         PinnedNoteSlot(
-                                            modifier      = Modifier.fillMaxWidth().weight(1f - splitFraction),
-                                            pinnedIds     = pinnedBottomNotes,
-                                            pinnedIndex   = pinnedBottomIndex,
-                                            allNotes      = allNotes,
-                                            worldEntries  = worldEntries,
-                                            activeTheme   = activeTheme,
-                                            onPrev        = onPrevBottom,
-                                            onNext        = onNextBottom,
-                                            onSwitch      = onSwitchBottom,
-                                            onEdit        = onEditBottom,
-                                            onRemove      = onRemoveBottom,
-                                            onPick        = onPickBottom,
-                                            hazeState     = hazeState,
+                                            modifier        = Modifier.fillMaxWidth().weight(1f - splitFraction),
+                                            pinnedIds       = pinnedBottomNotes,
+                                            pinnedIndex     = pinnedBottomIndex,
+                                            allNotes        = allNotes,
+                                            worldEntries    = worldEntries,
+                                            activeTheme     = activeTheme,
+                                            onPrev          = onPrevBottom,
+                                            onNext          = onNextBottom,
+                                            onSwitch        = onSwitchBottom,
+                                            onEdit          = onEditBottom,
+                                            onRemove        = onRemoveBottom,
+                                            onPick          = onPickBottom,
+                                            hazeState       = hazeState,
+                                            onHeaderDrag    = onBottomHeaderDrag,
+                                            onHeaderDragEnd = onHeaderDragEnd,
                                         )
                                     }
                                 }
@@ -1417,109 +1459,115 @@ private fun RightCompanionPanel(
 }
 
 // ── Split divider — the S-quill handle between the two slots ─────────────────
+// Design:
+//   • The FULL strip (28dp wide/tall) is the drag target — immediate drag to
+//     resize, no long-press required, large hit area, no gesture conflict.
+//   • The S-quill pill in the center is the SWAP tap target — one tap swaps
+//     the two slots with haptic feedback.
+//   • Two separate pointerInput blocks (required — one detector per block).
 @Composable
 private fun SplitDivider(
     isHorizontal : Boolean,
     onDrag       : (Float) -> Unit,
-    onLongPress  : () -> Unit,
+    onSwap       : () -> Unit,          // tap the icon to swap slots
     accentColor  : Color,
     hazeState    : dev.chrisbanes.haze.HazeState,
 ) {
     val haptic = LocalHapticFeedback.current
 
     if (isHorizontal) {
-        // Vertical bar (separates left/right)
+        // ── Vertical strip (separates left / right) ───────────────────────────
         Box(
-            modifier          = Modifier
+            modifier         = Modifier
                 .fillMaxHeight()
-                .width(28.dp),
-            contentAlignment  = Alignment.Center
+                .width(28.dp)
+                // pointerInput 1: full-strip drag → resize immediately on touch
+                .pointerInput(Unit) {
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        onDrag(dragAmount.x)
+                    }
+                },
+            contentAlignment = Alignment.Center
         ) {
-            // Thin line
+            // Thin separator line
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
                     .width(1.dp)
                     .background(MaterialTheme.colorScheme.outlineVariant)
             )
-            // Drag handle pill with S-quill icon
+            // S-quill pill — tap to swap
             Surface(
                 shape    = RoundedCornerShape(50),
                 color    = MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier
-                    .size(24.dp)
+                    .size(26.dp)
+                    // pointerInput 2: tap on the icon → swap slots
                     .pointerInput(Unit) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
-                            onDrag      = { change, dragAmount ->
-                                change.consume()
-                                onDrag(dragAmount.x)
+                        detectTapGestures(
+                            onTap = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onSwap()
                             }
                         )
                     }
-                    .combinedClickable(
-                        onLongClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onLongPress()
-                        },
-                        onClick = {}
-                    )
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        painter = painterResource(R.drawable.ic_scribe_s),
-                        contentDescription = "Drag to resize",
-                        tint     = accentColor,
-                        modifier = Modifier.size(14.dp)
+                        painter           = painterResource(R.drawable.ic_scribe_s),
+                        contentDescription = "Tap to swap slots",
+                        tint              = accentColor,
+                        modifier          = Modifier.size(14.dp)
                     )
                 }
             }
         }
     } else {
-        // Horizontal bar (separates top/bottom)
+        // ── Horizontal strip (separates top / bottom) ─────────────────────────
         Box(
             modifier         = Modifier
                 .fillMaxWidth()
-                .height(28.dp),
+                .height(28.dp)
+                // pointerInput 1: full-strip drag → resize immediately on touch
+                .pointerInput(Unit) {
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        onDrag(dragAmount.y)
+                    }
+                },
             contentAlignment = Alignment.Center
         ) {
-            // Thin line
+            // Thin separator line
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(1.dp)
                     .background(MaterialTheme.colorScheme.outlineVariant)
             )
-            // Drag handle pill
+            // S-quill pill — tap to swap
             Surface(
                 shape    = RoundedCornerShape(50),
                 color    = MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier
-                    .height(24.dp)
-                    .width(40.dp)
+                    .height(26.dp)
+                    .width(44.dp)
+                    // pointerInput 2: tap on the icon → swap slots
                     .pointerInput(Unit) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
-                            onDrag      = { change, dragAmount ->
-                                change.consume()
-                                onDrag(dragAmount.y)
+                        detectTapGestures(
+                            onTap = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onSwap()
                             }
                         )
                     }
-                    .combinedClickable(
-                        onLongClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onLongPress()
-                        },
-                        onClick = {}
-                    )
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        painter = painterResource(R.drawable.ic_scribe_s),
-                        contentDescription = "Drag to resize",
-                        tint     = accentColor,
-                        modifier = Modifier.size(14.dp)
+                        painter           = painterResource(R.drawable.ic_scribe_s),
+                        contentDescription = "Tap to swap slots",
+                        tint              = accentColor,
+                        modifier          = Modifier.size(14.dp)
                     )
                 }
             }
@@ -1550,19 +1598,23 @@ private fun PillTab(label: String, selected: Boolean, onClick: () -> Unit) {
 // ── Pinned note slot — full-section box, no inner card ────────────────────────
 @Composable
 private fun PinnedNoteSlot(
-    modifier     : Modifier = Modifier,
-    pinnedIds    : List<String>,
-    pinnedIndex  : Int,
-    allNotes     : List<Note>,
-    worldEntries : List<WorldEntry>,
-    activeTheme  : com.primaloptima.scribe.util.model.AppTheme?,
-    onPrev       : () -> Unit,
-    onNext       : () -> Unit,
-    onSwitch     : () -> Unit,
-    onEdit       : (String) -> Unit,
-    onRemove     : (String) -> Unit,
-    onPick       : () -> Unit,
-    hazeState    : dev.chrisbanes.haze.HazeState,
+    modifier        : Modifier = Modifier,
+    pinnedIds       : List<String>,
+    pinnedIndex     : Int,
+    allNotes        : List<Note>,
+    worldEntries    : List<WorldEntry>,
+    activeTheme     : com.primaloptima.scribe.util.model.AppTheme?,
+    onPrev          : () -> Unit,
+    onNext          : () -> Unit,
+    onSwitch        : () -> Unit,
+    onEdit          : (String) -> Unit,
+    onRemove        : (String) -> Unit,
+    onPick          : () -> Unit,
+    hazeState       : dev.chrisbanes.haze.HazeState,
+    // Header drag: direction passed as (dx, dy) in px so the caller decides
+    // whether to swap (vertical drag) or toggle split layout (horizontal drag)
+    onHeaderDrag    : ((dx: Float, dy: Float) -> Unit)? = null,
+    onHeaderDragEnd : (() -> Unit)? = null,
 ) {
     val currentId = pinnedIds.getOrNull(pinnedIndex)
     val currentNote = remember(currentId, allNotes, worldEntries) {
@@ -1611,11 +1663,31 @@ private fun PinnedNoteSlot(
             Column(Modifier.fillMaxSize()) {
 
                 // ── Note title pill header ────────────────────────────────────
-                // Sits at the very top of the section box, no extra outer card
+                // Long-press + drag on the header row moves the section.
+                // Direction: mostly-vertical drag → swap slots
+                //            mostly-horizontal drag → toggle split orientation
+                var headerDragging by remember { mutableStateOf(false) }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 4.dp),
+                        .background(
+                            if (headerDragging) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.18f)
+                            else Color.Transparent
+                        )
+                        .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 4.dp)
+                        // Two separate pointerInput blocks — required by Compose gesture API
+                        .pointerInput(onHeaderDrag, onHeaderDragEnd) {
+                            if (onHeaderDrag == null) return@pointerInput
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = { headerDragging = true },
+                                onDragEnd   = { headerDragging = false; onHeaderDragEnd?.invoke() },
+                                onDragCancel = { headerDragging = false },
+                                onDrag      = { change, dragAmount ->
+                                    change.consume()
+                                    onHeaderDrag(dragAmount.x, dragAmount.y)
+                                }
+                            )
+                        },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Title pill — themeable accent background
