@@ -10,6 +10,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -59,6 +60,12 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.ui.res.painterResource
+import com.primaloptima.scribe.R
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.foundation.layout.BoxWithConstraints
 import dev.chrisbanes.haze.hazeSource
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
@@ -196,6 +203,8 @@ fun MainEditorScreen(
     val pinnedTopIndex     by editorVm.pinnedTopIndex.collectAsStateWithLifecycle()
     val pinnedBottomNotes  by editorVm.pinnedBottomNotes.collectAsStateWithLifecycle()
     val pinnedBottomIndex  by editorVm.pinnedBottomIndex.collectAsStateWithLifecycle()
+    val companionTabBarBottom   by editorVm.companionTabBarBottom.collectAsStateWithLifecycle()
+    val companionSplitHorizontal by editorVm.companionSplitHorizontal.collectAsStateWithLifecycle()
 
     // ── Local UI state ────────────────────────────────────────────────────────
     var rightPanelTab   by remember { mutableIntStateOf(0) }
@@ -293,12 +302,18 @@ fun MainEditorScreen(
     }
 
     // ── Gesture router ────────────────────────────────────────────────────────
+    // Rules:
+    //  A) If first motion is mostly vertical (ady > adx * 0.7) → bail out
+    //     immediately so Sora/scroll children get every event natively.
+    //  B) Keyboard open OR companion panel open → skip all custom gestures.
+    //  C) Otherwise, edge-zone + clearly horizontal motion → open drawer/pager.
+    val isKeyboardOpenForGesture = WindowInsets.isImeVisible
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(leftDrawerState, rightPagerState, isCompanionOpen) {
+            .pointerInput(leftDrawerState, rightPagerState, isCompanionOpen, isKeyboardOpenForGesture) {
                 val edgeZonePx      = 20.dp.toPx()
-                val slopPx          = 18.dp.toPx()
+                val slopPx          = 16.dp.toPx()
                 val tapSlopPx       = 16f
                 val drawerTriggerPx = 72.dp.toPx()
                 val doubleTapTimeout  = viewConfiguration.doubleTapTimeoutMillis
@@ -316,37 +331,39 @@ fun MainEditorScreen(
 
                         pendingTap?.let { if (touchTime - it.time > doubleTapTimeout) pendingTap = null }
 
-                        // ── Double-tap ─────────────────────────────────────────
-                        val isSecondTap = pendingTap?.let { first ->
-                            val dt  = touchTime - first.time
-                            val dxt = startX - first.x
-                            val dyt = startY - first.y
-                            dt >= doubleTapMinTime && dt <= doubleTapTimeout &&
-                                    kotlin.math.sqrt(dxt * dxt + dyt * dyt) < tapSlopPx
-                        } ?: false
+                        // ── Double-tap (only when keyboard is closed) ──────────
+                        if (!isKeyboardOpenForGesture) {
+                            val isSecondTap = pendingTap?.let { first ->
+                                val dt  = touchTime - first.time
+                                val dxt = startX - first.x
+                                val dyt = startY - first.y
+                                dt >= doubleTapMinTime && dt <= doubleTapTimeout &&
+                                        kotlin.math.sqrt(dxt * dxt + dyt * dyt) < tapSlopPx
+                            } ?: false
 
-                        if (isSecondTap) {
-                            pendingTap = null
-                            down.consume()
-                            var becameDrag = false
-                            while (true) {
-                                val event  = awaitPointerEvent(PointerEventPass.Initial)
-                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                if (!change.pressed) {
-                                    if (!becameDrag) { change.consume(); editorVm.toggleZen() }
-                                    break
+                            if (isSecondTap) {
+                                pendingTap = null
+                                down.consume()
+                                var becameDrag = false
+                                while (true) {
+                                    val event  = awaitPointerEvent(PointerEventPass.Initial)
+                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!change.pressed) {
+                                        if (!becameDrag) { change.consume(); editorVm.toggleZen() }
+                                        break
+                                    }
+                                    val cdx = change.position.x - startX
+                                    val cdy = change.position.y - startY
+                                    if (kotlin.math.sqrt(cdx * cdx + cdy * cdy) > tapSlopPx) becameDrag = true
                                 }
-                                val cdx = change.position.x - startX
-                                val cdy = change.position.y - startY
-                                if (kotlin.math.sqrt(cdx * cdx + cdy * cdy) > tapSlopPx) becameDrag = true
+                                continue
                             }
-                            continue
                         }
 
                         pendingTap = PendingTap(startX, startY, touchTime)
 
-                        // ── Edge swipe — disabled when companion panel is open ─
-                        if (isCompanionOpen) continue
+                        // ── Locks: keyboard open or companion open → pass through ─
+                        if (isKeyboardOpenForGesture || isCompanionOpen) continue
 
                         val isLeftEdge  = startX < edgeZonePx
                         val isRightEdge = startX > size.width - edgeZonePx
@@ -354,10 +371,12 @@ fun MainEditorScreen(
 
                         var hasExitedSlop = false
                         var drawerFired   = false
+                        var abandonedAsVertical = false
                         while (true) {
                             val event  = awaitPointerEvent(PointerEventPass.Initial)
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
                             if (!change.pressed) break
+                            if (abandonedAsVertical) break
 
                             val dx   = change.position.x - startX
                             val dy   = change.position.y - startY
@@ -367,11 +386,12 @@ fun MainEditorScreen(
                                 hasExitedSlop = true
                                 val adx = if (dx < 0f) -dx else dx
                                 val ady = if (dy < 0f) -dy else dy
-                                if (ady >= adx * 1.3f) break
+                                // Any vertical lean → abandon and let scroll handle it
+                                if (ady > adx * 0.7f) { abandonedAsVertical = true; break }
                                 if (adx <= ady * 1.3f) break
                             }
 
-                            if (hasExitedSlop) {
+                            if (hasExitedSlop && !abandonedAsVertical) {
                                 val towardCenter = (isLeftEdge && dx > 0f) || (isRightEdge && dx < 0f)
                                 if (!towardCenter) break
                                 val absDx = if (dx < 0f) -dx else dx
@@ -913,32 +933,37 @@ fun MainEditorScreen(
                         // ────────────────────────────────────────────────────
                         1 -> {
                             RightCompanionPanel(
-                                rightPanelTab    = rightPanelTab,
-                                onTabChange      = { rightPanelTab = it },
-                                pinnedTopNotes   = pinnedTopNotes,
-                                pinnedTopIndex   = pinnedTopIndex,
-                                pinnedBottomNotes = pinnedBottomNotes,
-                                pinnedBottomIndex = pinnedBottomIndex,
-                                allNotes         = allNotes,
-                                worldEntries     = worldEntries,
-                                outline          = outline,
-                                activeTheme      = activeTheme,
-                                soraEditorRef    = soraEditorRef,
-                                onPrevTop        = { editorVm.prevPinnedTop() },
-                                onNextTop        = { editorVm.nextPinnedTop() },
-                                onSwitchTop      = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
-                                onEditTop        = { id -> editorVm.loadNote(id) },
-                                onRemoveTop      = { id -> editorVm.removePinnedTop(id) },
-                                onPrevBottom     = { editorVm.prevPinnedBottom() },
-                                onNextBottom     = { editorVm.nextPinnedBottom() },
-                                onSwitchBottom   = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
-                                onEditBottom     = { id -> editorVm.loadNote(id) },
-                                onRemoveBottom   = { id -> editorVm.removePinnedBottom(id) },
-                                onPickTop        = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
-                                onPickBottom     = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
-                                onClose          = { scope.launch { rightPagerState.animateScrollToPage(0) } },
-                                barBlurBitmap    = barBlurBitmap,
-                                hazeState        = hazeState,
+                                rightPanelTab         = rightPanelTab,
+                                onTabChange           = { rightPanelTab = it },
+                                pinnedTopNotes        = pinnedTopNotes,
+                                pinnedTopIndex        = pinnedTopIndex,
+                                pinnedBottomNotes     = pinnedBottomNotes,
+                                pinnedBottomIndex     = pinnedBottomIndex,
+                                allNotes              = allNotes,
+                                worldEntries          = worldEntries,
+                                outline               = outline,
+                                activeTheme           = activeTheme,
+                                soraEditorRef         = soraEditorRef,
+                                tabBarAtBottom        = companionTabBarBottom,
+                                splitHorizontal       = companionSplitHorizontal,
+                                onToggleTabBarPos     = { editorVm.setCompanionTabBarBottom(!companionTabBarBottom) },
+                                onToggleSplitLayout   = { editorVm.setCompanionSplitHorizontal(!companionSplitHorizontal) },
+                                onSwapSlots           = { editorVm.swapPinnedSlots() },
+                                onPrevTop             = { editorVm.prevPinnedTop() },
+                                onNextTop             = { editorVm.nextPinnedTop() },
+                                onSwitchTop           = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
+                                onEditTop             = { id -> editorVm.loadNote(id) },
+                                onRemoveTop           = { id -> editorVm.removePinnedTop(id) },
+                                onPrevBottom          = { editorVm.prevPinnedBottom() },
+                                onNextBottom          = { editorVm.nextPinnedBottom() },
+                                onSwitchBottom        = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
+                                onEditBottom          = { id -> editorVm.loadNote(id) },
+                                onRemoveBottom        = { id -> editorVm.removePinnedBottom(id) },
+                                onPickTop             = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
+                                onPickBottom          = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
+                                onClose               = { scope.launch { rightPagerState.animateScrollToPage(0) } },
+                                barBlurBitmap         = barBlurBitmap,
+                                hazeState             = hazeState,
                             )
                         }
                     }
@@ -1043,245 +1068,345 @@ fun MainEditorScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RightCompanionPanel(
-    rightPanelTab     : Int,
-    onTabChange       : (Int) -> Unit,
-    pinnedTopNotes    : List<String>,
-    pinnedTopIndex    : Int,
-    pinnedBottomNotes : List<String>,
-    pinnedBottomIndex : Int,
-    allNotes          : List<Note>,
-    worldEntries      : List<WorldEntry>,
-    outline           : List<com.primaloptima.scribe.util.model.OutlineEntry>,
-    activeTheme       : com.primaloptima.scribe.util.model.AppTheme?,
-    soraEditorRef     : CodeEditor?,
-    onPrevTop         : () -> Unit,
-    onNextTop         : () -> Unit,
-    onSwitchTop       : () -> Unit,
-    onEditTop         : (String) -> Unit,
-    onRemoveTop       : (String) -> Unit,
-    onPrevBottom      : () -> Unit,
-    onNextBottom      : () -> Unit,
-    onSwitchBottom    : () -> Unit,
-    onEditBottom      : (String) -> Unit,
-    onRemoveBottom    : (String) -> Unit,
-    onPickTop         : () -> Unit,
-    onPickBottom      : () -> Unit,
-    onClose           : () -> Unit,
-    barBlurBitmap     : Bitmap?,
-    hazeState         : dev.chrisbanes.haze.HazeState,
+    rightPanelTab       : Int,
+    onTabChange         : (Int) -> Unit,
+    pinnedTopNotes      : List<String>,
+    pinnedTopIndex      : Int,
+    pinnedBottomNotes   : List<String>,
+    pinnedBottomIndex   : Int,
+    allNotes            : List<Note>,
+    worldEntries        : List<WorldEntry>,
+    outline             : List<com.primaloptima.scribe.util.model.OutlineEntry>,
+    activeTheme         : com.primaloptima.scribe.util.model.AppTheme?,
+    soraEditorRef       : CodeEditor?,
+    tabBarAtBottom      : Boolean,
+    splitHorizontal     : Boolean,
+    onToggleTabBarPos   : () -> Unit,
+    onToggleSplitLayout : () -> Unit,
+    onSwapSlots         : () -> Unit,
+    onPrevTop           : () -> Unit,
+    onNextTop           : () -> Unit,
+    onSwitchTop         : () -> Unit,
+    onEditTop           : (String) -> Unit,
+    onRemoveTop         : (String) -> Unit,
+    onPrevBottom        : () -> Unit,
+    onNextBottom        : () -> Unit,
+    onSwitchBottom      : () -> Unit,
+    onEditBottom        : (String) -> Unit,
+    onRemoveBottom      : (String) -> Unit,
+    onPickTop           : () -> Unit,
+    onPickBottom        : () -> Unit,
+    onClose             : () -> Unit,
+    barBlurBitmap       : Bitmap?,
+    hazeState           : dev.chrisbanes.haze.HazeState,
 ) {
-    // Provide barBlurBitmap as LocalOneShotBitmap for the entire panel so that
-    // frostedPanel + frostedBar read it on pre-API-31 devices (Haze handles
-    // API 31+ natively). This mirrors how the home screen drawer works.
-    CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .frostedPanel(hazeState)
-    ) {
-    Scaffold(
-        containerColor      = Color.Transparent,
-        contentWindowInsets = WindowInsets.systemBars,
-        topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor             = Color.Transparent,
-                    titleContentColor          = MaterialTheme.colorScheme.onSurface,
-                    navigationIconContentColor = MaterialTheme.colorScheme.primary,
-                    actionIconContentColor     = MaterialTheme.colorScheme.primary,
-                ),
-                modifier = Modifier.frostedBar(hazeState),
-                navigationIcon = {
-                    IconButton(onClick = onClose) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = "Back to Editor"
-                        )
-                    }
-                },
-                title = {
-                    Text(
-                        text       = if (rightPanelTab == 0) "Pinned Notes" else "Outline",
-                        fontWeight = FontWeight.Bold,
-                        fontSize   = 17.sp,
-                        maxLines   = 1,
-                        overflow   = TextOverflow.Ellipsis,
-                    )
-                },
-                actions = {
-                    Surface(
-                        shape    = RoundedCornerShape(50),
-                        color    = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.padding(end = 8.dp, top = 4.dp, bottom = 4.dp)
-                    ) {
-                        Row(modifier = Modifier.padding(3.dp)) {
-                            PillTab(label = "Pinned",  selected = rightPanelTab == 0, onClick = { onTabChange(0) })
-                            PillTab(label = "Outline", selected = rightPanelTab == 1, onClick = { onTabChange(1) })
-                        }
-                    }
-                }
-            )
+    val haptic = LocalHapticFeedback.current
+    val accentColor = MaterialTheme.colorScheme.primary
+
+    // Drag-resize: fraction of space the top/first slot takes (0.2 … 0.8)
+    var splitFraction by remember { mutableFloatStateOf(0.5f) }
+
+    // Tab-bar content — reused in both top and bottom positions
+    val tabBarContent: @Composable () -> Unit = {
+        Surface(
+            shape    = RoundedCornerShape(50),
+            color    = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.padding(3.dp)
+        ) {
+            Row(modifier = Modifier.padding(3.dp)) {
+                PillTab(label = "Pinned",  selected = rightPanelTab == 0, onClick = { onTabChange(0) })
+                PillTab(label = "Outline", selected = rightPanelTab == 1, onClick = { onTabChange(1) })
+            }
         }
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when (rightPanelTab) {
+    }
 
-                0 -> {
-                    Column(
-                        modifier             = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalArrangement  = Arrangement.spacedBy(10.dp)
-                    ) {
-                        PinnedNoteSlot(
-                            modifier          = Modifier.weight(1f),
-                            pinnedIds         = pinnedTopNotes,
-                            pinnedIndex       = pinnedTopIndex,
-                            allNotes          = allNotes,
-                            worldEntries      = worldEntries,
-                            activeTheme       = activeTheme,
-                            onPrev            = onPrevTop,
-                            onNext            = onNextTop,
-                            onSwitch          = onSwitchTop,
-                            onEdit            = onEditTop,
-                            onRemove          = onRemoveTop,
-                            onPick            = onPickTop,
-                            hazeState         = hazeState,
-                        )
+    CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .frostedPanel(hazeState)
+        ) {
+            Column(Modifier.fillMaxSize()) {
 
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
-                            Surface(
-                                shape    = RoundedCornerShape(50),
-                                color    = MaterialTheme.colorScheme.surfaceVariant,
-                                modifier = Modifier.padding(horizontal = 8.dp)
-                            ) {
-                                Text(
-                                    "B",
-                                    fontSize   = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color      = MaterialTheme.colorScheme.outline,
-                                    modifier   = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                )
+                // ── Top bar ───────────────────────────────────────────────────
+                if (!tabBarAtBottom) {
+                    TopAppBar(
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor             = Color.Transparent,
+                            titleContentColor          = MaterialTheme.colorScheme.onSurface,
+                            navigationIconContentColor = MaterialTheme.colorScheme.primary,
+                            actionIconContentColor     = MaterialTheme.colorScheme.primary,
+                        ),
+                        modifier = Modifier.frostedBar(hazeState),
+                        navigationIcon = {
+                            IconButton(onClick = onClose) {
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Back to Editor")
                             }
-                            HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
+                        },
+                        title = { tabBarContent() },
+                        actions = {
+                            // Move tab bar to bottom
+                            IconButton(onClick = onToggleTabBarPos) {
+                                Icon(Icons.Default.VerticalAlignBottom, "Move tabs to bottom",
+                                     modifier = Modifier.size(20.dp))
+                            }
                         }
-
-                        PinnedNoteSlot(
-                            modifier          = Modifier.weight(1f),
-                            pinnedIds         = pinnedBottomNotes,
-                            pinnedIndex       = pinnedBottomIndex,
-                            allNotes          = allNotes,
-                            worldEntries      = worldEntries,
-                            activeTheme       = activeTheme,
-                            onPrev            = onPrevBottom,
-                            onNext            = onNextBottom,
-                            onSwitch          = onSwitchBottom,
-                            onEdit            = onEditBottom,
-                            onRemove          = onRemoveBottom,
-                            onPick            = onPickBottom,
-                            hazeState         = hazeState,
-                        )
-                    }
+                    )
                 }
 
-                1 -> {
-                    if (outline.isEmpty()) {
-                        Box(
-                            modifier           = Modifier.fillMaxSize().padding(32.dp),
-                            contentAlignment   = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Icon(
-                                    Icons.Outlined.FormatListBulleted,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(40.dp),
-                                    tint     = MaterialTheme.colorScheme.outlineVariant
-                                )
-                                Text(
-                                    "No headings yet",
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize   = 16.sp,
-                                    color      = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    "Use # Heading to structure\nyour writing",
-                                    fontSize  = 13.sp,
-                                    color     = MaterialTheme.colorScheme.outline,
-                                    textAlign = TextAlign.Center
-                                )
-                            }
-                        }
-                    } else {
-                        LazyColumn(
-                            contentPadding      = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            items(outline) { entry ->
-                                val indentDp   = ((entry.level - 1) * 16).dp
-                                val isTopLevel = entry.level == 1
+                // ── Body ──────────────────────────────────────────────────────
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when (rightPanelTab) {
 
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(start = indentDp)
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(
-                                            if (isTopLevel) MaterialTheme.colorScheme.surfaceVariant
-                                            else Color.Transparent
-                                        )
-                                        .clickable {
-                                            soraEditorRef?.let { editor ->
-                                                val pos = editor.text.toString().indexOf(entry.text)
-                                                if (pos >= 0) {
-                                                    val line = editor.text.indexer.getCharLine(pos)
-                                                    val col  = editor.text.indexer.getCharColumn(pos)
-                                                    editor.cursor.set(line, col)
-                                                    editor.ensurePositionVisible(line, col)
-                                                }
-                                            }
-                                            onClose()
-                                        }
-                                        .padding(
-                                            horizontal = if (isTopLevel) 14.dp else 10.dp,
-                                            vertical   = if (isTopLevel) 12.dp else 8.dp
-                                        ),
-                                    verticalAlignment     = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Surface(
-                                        shape = RoundedCornerShape(5.dp),
-                                        color = if (isTopLevel) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.primaryContainer
+                        // ── Pinned Notes tab ──────────────────────────────────
+                        0 -> {
+                            val gapDp = 3.dp // tiny gap between sections and edges
+
+                            BoxWithConstraints(Modifier.fillMaxSize()) {
+                                // Capture total size in px once — safe in composable scope
+                                val density = androidx.compose.ui.platform.LocalDensity.current
+                                val totalPxFloat = with(density) {
+                                    if (splitHorizontal) maxWidth.toPx() else maxHeight.toPx()
+                                }
+
+                                if (splitHorizontal) {
+                                    // ── Side-by-side layout ───────────────────
+                                    Row(
+                                        modifier            = Modifier.fillMaxSize().padding(gapDp),
+                                        horizontalArrangement = Arrangement.spacedBy(0.dp)
                                     ) {
-                                        Text(
-                                            "H${entry.level}",
-                                            fontSize   = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color      = if (isTopLevel) MaterialTheme.colorScheme.onPrimary
-                                                         else MaterialTheme.colorScheme.onPrimaryContainer,
-                                            modifier   = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                        // Slot A (left)
+                                        PinnedNoteSlot(
+                                            modifier      = Modifier.fillMaxHeight().weight(splitFraction),
+                                            pinnedIds     = pinnedTopNotes,
+                                            pinnedIndex   = pinnedTopIndex,
+                                            allNotes      = allNotes,
+                                            worldEntries  = worldEntries,
+                                            activeTheme   = activeTheme,
+                                            onPrev        = onPrevTop,
+                                            onNext        = onNextTop,
+                                            onSwitch      = onSwitchTop,
+                                            onEdit        = onEditTop,
+                                            onRemove      = onRemoveTop,
+                                            onPick        = onPickTop,
+                                            hazeState     = hazeState,
+                                        )
+
+                                        // ── Drag-resizable divider ────────────
+                                        SplitDivider(
+                                            isHorizontal  = true,
+                                            onDrag        = { delta ->
+                                                splitFraction = (splitFraction + delta / totalPxFloat)
+                                                    .coerceIn(0.2f, 0.8f)
+                                            },
+                                            onLongPress   = onSwapSlots,
+                                            accentColor   = accentColor,
+                                            hazeState     = hazeState,
+                                        )
+
+                                        // Slot B (right)
+                                        PinnedNoteSlot(
+                                            modifier      = Modifier.fillMaxHeight().weight(1f - splitFraction),
+                                            pinnedIds     = pinnedBottomNotes,
+                                            pinnedIndex   = pinnedBottomIndex,
+                                            allNotes      = allNotes,
+                                            worldEntries  = worldEntries,
+                                            activeTheme   = activeTheme,
+                                            onPrev        = onPrevBottom,
+                                            onNext        = onNextBottom,
+                                            onSwitch      = onSwitchBottom,
+                                            onEdit        = onEditBottom,
+                                            onRemove      = onRemoveBottom,
+                                            onPick        = onPickBottom,
+                                            hazeState     = hazeState,
                                         )
                                     }
-                                    Text(
-                                        text       = entry.text,
-                                        fontSize   = if (isTopLevel) 15.sp else 13.sp,
-                                        fontWeight = if (isTopLevel) FontWeight.SemiBold else FontWeight.Normal,
-                                        color      = MaterialTheme.colorScheme.onSurface,
-                                        maxLines   = 2,
-                                        overflow   = TextOverflow.Ellipsis,
-                                        modifier   = Modifier.weight(1f)
-                                    )
-                                    if (isTopLevel) {
-                                        Icon(
-                                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp),
-                                            tint     = MaterialTheme.colorScheme.outline
+                                } else {
+                                    // ── Up-down layout ────────────────────────
+                                    Column(
+                                        modifier          = Modifier.fillMaxSize().padding(gapDp),
+                                        verticalArrangement = Arrangement.spacedBy(0.dp)
+                                    ) {
+                                        // Slot A (top)
+                                        PinnedNoteSlot(
+                                            modifier      = Modifier.fillMaxWidth().weight(splitFraction),
+                                            pinnedIds     = pinnedTopNotes,
+                                            pinnedIndex   = pinnedTopIndex,
+                                            allNotes      = allNotes,
+                                            worldEntries  = worldEntries,
+                                            activeTheme   = activeTheme,
+                                            onPrev        = onPrevTop,
+                                            onNext        = onNextTop,
+                                            onSwitch      = onSwitchTop,
+                                            onEdit        = onEditTop,
+                                            onRemove      = onRemoveTop,
+                                            onPick        = onPickTop,
+                                            hazeState     = hazeState,
+                                        )
+
+                                        // ── Drag-resizable divider ────────────
+                                        SplitDivider(
+                                            isHorizontal  = false,
+                                            onDrag        = { delta ->
+                                                splitFraction = (splitFraction + delta / totalPxFloat)
+                                                    .coerceIn(0.2f, 0.8f)
+                                            },
+                                            onLongPress   = onSwapSlots,
+                                            accentColor   = accentColor,
+                                            hazeState     = hazeState,
+                                        )
+
+                                        // Slot B (bottom)
+                                        PinnedNoteSlot(
+                                            modifier      = Modifier.fillMaxWidth().weight(1f - splitFraction),
+                                            pinnedIds     = pinnedBottomNotes,
+                                            pinnedIndex   = pinnedBottomIndex,
+                                            allNotes      = allNotes,
+                                            worldEntries  = worldEntries,
+                                            activeTheme   = activeTheme,
+                                            onPrev        = onPrevBottom,
+                                            onNext        = onNextBottom,
+                                            onSwitch      = onSwitchBottom,
+                                            onEdit        = onEditBottom,
+                                            onRemove      = onRemoveBottom,
+                                            onPick        = onPickBottom,
+                                            hazeState     = hazeState,
                                         )
                                     }
                                 }
+                            }
+                        }
+
+                        // ── Outline tab ───────────────────────────────────────
+                        1 -> {
+                            if (outline.isEmpty()) {
+                                Box(
+                                    modifier         = Modifier.fillMaxSize().padding(32.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Outlined.FormatListBulleted,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(40.dp),
+                                            tint     = MaterialTheme.colorScheme.outlineVariant
+                                        )
+                                        Text(
+                                            "No headings yet",
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize   = 16.sp,
+                                            color      = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            "Use # Heading to structure\nyour writing",
+                                            fontSize  = 13.sp,
+                                            color     = MaterialTheme.colorScheme.outline,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                }
+                            } else {
+                                LazyColumn(
+                                    contentPadding      = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    items(outline) { entry ->
+                                        val indentDp   = ((entry.level - 1) * 16).dp
+                                        val isTopLevel = entry.level == 1
+
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(start = indentDp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(
+                                                    if (isTopLevel) MaterialTheme.colorScheme.surfaceVariant
+                                                    else Color.Transparent
+                                                )
+                                                .clickable {
+                                                    soraEditorRef?.let { editor ->
+                                                        val pos = editor.text.toString().indexOf(entry.text)
+                                                        if (pos >= 0) {
+                                                            val line = editor.text.indexer.getCharLine(pos)
+                                                            val col  = editor.text.indexer.getCharColumn(pos)
+                                                            editor.cursor.set(line, col)
+                                                            editor.ensurePositionVisible(line, col)
+                                                        }
+                                                    }
+                                                    onClose()
+                                                }
+                                                .padding(
+                                                    horizontal = if (isTopLevel) 14.dp else 10.dp,
+                                                    vertical   = if (isTopLevel) 12.dp else 8.dp
+                                                ),
+                                            verticalAlignment     = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            Surface(
+                                                shape = RoundedCornerShape(5.dp),
+                                                color = if (isTopLevel) MaterialTheme.colorScheme.primary
+                                                        else MaterialTheme.colorScheme.primaryContainer
+                                            ) {
+                                                Text(
+                                                    "H${entry.level}",
+                                                    fontSize   = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color      = if (isTopLevel) MaterialTheme.colorScheme.onPrimary
+                                                                 else MaterialTheme.colorScheme.onPrimaryContainer,
+                                                    modifier   = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                            Text(
+                                                text       = entry.text,
+                                                fontSize   = if (isTopLevel) 15.sp else 13.sp,
+                                                fontWeight = if (isTopLevel) FontWeight.SemiBold else FontWeight.Normal,
+                                                color      = MaterialTheme.colorScheme.onSurface,
+                                                maxLines   = 2,
+                                                overflow   = TextOverflow.Ellipsis,
+                                                modifier   = Modifier.weight(1f)
+                                            )
+                                            if (isTopLevel) {
+                                                Icon(
+                                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp),
+                                                    tint     = MaterialTheme.colorScheme.outline
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── Bottom bar (when tab bar is at bottom) ────────────────────
+                if (tabBarAtBottom) {
+                    Surface(
+                        color    = Color.Transparent,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .frostedBar(hazeState)
+                    ) {
+                        Row(
+                            modifier          = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            IconButton(onClick = onClose) {
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Back to Editor")
+                            }
+                            tabBarContent()
+                            // Move tab bar back to top
+                            IconButton(onClick = onToggleTabBarPos) {
+                                Icon(Icons.Default.VerticalAlignTop, "Move tabs to top",
+                                     modifier = Modifier.size(20.dp))
                             }
                         }
                     }
@@ -1289,8 +1414,117 @@ private fun RightCompanionPanel(
             }
         }
     }
-    } // end Box (frostedPanel background)
-    } // end CompositionLocalProvider (LocalOneShotBitmap)
+}
+
+// ── Split divider — the S-quill handle between the two slots ─────────────────
+@Composable
+private fun SplitDivider(
+    isHorizontal : Boolean,
+    onDrag       : (Float) -> Unit,
+    onLongPress  : () -> Unit,
+    accentColor  : Color,
+    hazeState    : dev.chrisbanes.haze.HazeState,
+) {
+    val haptic = LocalHapticFeedback.current
+
+    if (isHorizontal) {
+        // Vertical bar (separates left/right)
+        Box(
+            modifier          = Modifier
+                .fillMaxHeight()
+                .width(28.dp),
+            contentAlignment  = Alignment.Center
+        ) {
+            // Thin line
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(1.dp)
+                    .background(MaterialTheme.colorScheme.outlineVariant)
+            )
+            // Drag handle pill with S-quill icon
+            Surface(
+                shape    = RoundedCornerShape(50),
+                color    = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .size(24.dp)
+                    .pointerInput(Unit) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
+                            onDrag      = { change, dragAmount ->
+                                change.consume()
+                                onDrag(dragAmount.x)
+                            }
+                        )
+                    }
+                    .combinedClickable(
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onLongPress()
+                        },
+                        onClick = {}
+                    )
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_scribe_s),
+                        contentDescription = "Drag to resize",
+                        tint     = accentColor,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+        }
+    } else {
+        // Horizontal bar (separates top/bottom)
+        Box(
+            modifier         = Modifier
+                .fillMaxWidth()
+                .height(28.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            // Thin line
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(MaterialTheme.colorScheme.outlineVariant)
+            )
+            // Drag handle pill
+            Surface(
+                shape    = RoundedCornerShape(50),
+                color    = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .height(24.dp)
+                    .width(40.dp)
+                    .pointerInput(Unit) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
+                            onDrag      = { change, dragAmount ->
+                                change.consume()
+                                onDrag(dragAmount.y)
+                            }
+                        )
+                    }
+                    .combinedClickable(
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onLongPress()
+                        },
+                        onClick = {}
+                    )
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_scribe_s),
+                        contentDescription = "Drag to resize",
+                        tint     = accentColor,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+        }
+    }
 }
 
 // ── Pill tab ──────────────────────────────────────────────────────────────────
@@ -1313,7 +1547,7 @@ private fun PillTab(label: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-// ── Pinned note slot ──────────────────────────────────────────────────────────
+// ── Pinned note slot — full-section box, no inner card ────────────────────────
 @Composable
 private fun PinnedNoteSlot(
     modifier     : Modifier = Modifier,
@@ -1338,13 +1572,16 @@ private fun PinnedNoteSlot(
             }
     }
 
+    // The section box — fills the space given by the parent (weight)
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .frostedCard(hazeState, RoundedCornerShape(16.dp), applyFallbackBackground = true)
+            .padding(bottom = 2.dp) // tiny gap before the divider
+            .clip(RoundedCornerShape(12.dp))
+            .frostedCard(hazeState, RoundedCornerShape(12.dp), applyFallbackBackground = true)
     ) {
         if (currentNote == null) {
+            // Empty slot — tap to pick
             Column(
                 modifier            = Modifier.fillMaxSize().clickable(onClick = onPick),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -1353,70 +1590,85 @@ private fun PinnedNoteSlot(
                 Surface(
                     shape    = CircleShape,
                     color    = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(56.dp)
+                    modifier = Modifier.size(48.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             Icons.Default.AddCircleOutline,
                             contentDescription = "Pin a reference note",
                             tint     = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                 }
-                Spacer(Modifier.height(10.dp))
-                Text("Pin a reference note", fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                Spacer(Modifier.height(8.dp))
+                Text("Pin a reference note", fontSize = 13.sp, fontWeight = FontWeight.Medium,
                      color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(4.dp))
-                Text("Tap to browse your vault", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                Spacer(Modifier.height(3.dp))
+                Text("Tap to browse your vault", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
             }
         } else {
             Column(Modifier.fillMaxSize()) {
+
+                // ── Note title pill header ────────────────────────────────────
+                // Sits at the very top of the section box, no extra outer card
                 Row(
-                    modifier          = Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        currentNote.name,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize   = 14.sp,
-                        color      = MaterialTheme.colorScheme.primary,
-                        maxLines   = 1,
-                        overflow   = TextOverflow.Ellipsis,
-                        modifier   = Modifier.weight(1f)
-                    )
+                    // Title pill — themeable accent background
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.weight(1f).padding(end = 4.dp)
+                    ) {
+                        Text(
+                            text     = currentNote.name,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize   = 12.sp,
+                            color      = MaterialTheme.colorScheme.onPrimaryContainer,
+                            maxLines   = 1,
+                            overflow   = TextOverflow.Ellipsis,
+                            modifier   = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                    // Pagination
                     if (pinnedIds.size > 1) {
                         Text(
                             "${pinnedIndex + 1}/${pinnedIds.size}",
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             color    = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.padding(end = 4.dp)
+                            modifier = Modifier.padding(end = 2.dp)
                         )
-                        IconButton(onClick = onPrev, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null, Modifier.size(16.dp))
+                        IconButton(onClick = onPrev, modifier = Modifier.size(26.dp)) {
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null, Modifier.size(14.dp))
                         }
-                        IconButton(onClick = onNext, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(16.dp))
+                        IconButton(onClick = onNext, modifier = Modifier.size(26.dp)) {
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(14.dp))
                         }
                     }
-                    IconButton(onClick = onSwitch,               modifier = Modifier.size(28.dp)) {
-                        Icon(Icons.Default.SwapHoriz, contentDescription = "Switch note", modifier = Modifier.size(16.dp))
+                    IconButton(onClick = onSwitch, modifier = Modifier.size(26.dp)) {
+                        Icon(Icons.Default.SwapHoriz, "Switch note", Modifier.size(14.dp))
                     }
-                    IconButton(onClick = { onEdit(currentNote.id) }, modifier = Modifier.size(28.dp)) {
-                        Icon(Icons.Default.Edit, contentDescription = "Edit in main editor", modifier = Modifier.size(16.dp))
+                    IconButton(onClick = { onEdit(currentNote.id) }, modifier = Modifier.size(26.dp)) {
+                        Icon(Icons.Default.Edit, "Edit in main editor", Modifier.size(14.dp))
                     }
-                    IconButton(onClick = { onRemove(currentNote.id) }, modifier = Modifier.size(28.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Unpin", modifier = Modifier.size(16.dp))
+                    IconButton(onClick = { onRemove(currentNote.id) }, modifier = Modifier.size(26.dp)) {
+                        Icon(Icons.Default.Close, "Unpin", Modifier.size(14.dp))
                     }
                 }
 
+                // Thin separator between header and content
                 HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                    color    = MaterialTheme.colorScheme.outlineVariant
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                    color    = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                 )
 
+                // ── Note content (Sora read-only) ─────────────────────────────
                 AndroidView(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    modifier = Modifier.weight(1f).fillMaxWidth().padding(bottom = 2.dp),
                     factory  = { ctx ->
                         CodeEditor(ctx).apply {
                             isEditable             = false
@@ -1439,10 +1691,7 @@ private fun PinnedNoteSlot(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Supporting private composables
-// ─────────────────────────────────────────────────────────────────────────────
-
+// ── File explorer overlay ─────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FileExplorerOverlayDialog(
@@ -1512,7 +1761,6 @@ private fun FileExplorerOverlayDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
-
 @Composable
 private fun FormatButton(
     label      : String,

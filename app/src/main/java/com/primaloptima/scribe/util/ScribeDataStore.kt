@@ -72,6 +72,13 @@ class ScribeDataStore(private val context: Context) {
         val SHORTCUTS_JSON     = stringPreferencesKey("shortcuts_json")
         val PINNED_JSON        = stringPreferencesKey("pinned_json")
 
+        // Companion panel — pinned notes slots (persisted as JSON list of note IDs)
+        val PINNED_TOP_JSON    = stringPreferencesKey("pinned_top_json")
+        val PINNED_BOTTOM_JSON = stringPreferencesKey("pinned_bottom_json")
+        // Companion panel — UI prefs
+        val COMPANION_TAB_BAR_BOTTOM   = booleanPreferencesKey("companion_tab_bar_bottom")
+        val COMPANION_SPLIT_HORIZONTAL = booleanPreferencesKey("companion_split_horizontal") // true = side-by-side, false = up/down
+
         // Per-book goals (dynamic)
         fun bookGoalKey(bookId: String) = stringPreferencesKey("book_goal_$bookId")
 
@@ -112,6 +119,12 @@ class ScribeDataStore(private val context: Context) {
     val dailyGoalFlow: Flow<Int>             = store.data.map { it[DAILY_GOAL] ?: 500 }
     val shortcutsJsonFlow: Flow<String?>     = store.data.map { it[SHORTCUTS_JSON] }
     val pinnedJsonFlow: Flow<String?>        = store.data.map { it[PINNED_JSON] }
+
+    // Companion panel persistent state
+    val pinnedTopJsonFlow: Flow<String?>     = store.data.map { it[PINNED_TOP_JSON] }
+    val pinnedBottomJsonFlow: Flow<String?>  = store.data.map { it[PINNED_BOTTOM_JSON] }
+    val companionTabBarBottomFlow: Flow<Boolean>   = store.data.map { it[COMPANION_TAB_BAR_BOTTOM] ?: false }
+    val companionSplitHorizontalFlow: Flow<Boolean> = store.data.map { it[COMPANION_SPLIT_HORIZONTAL] ?: false }
 
     val autoHistoryEnabledFlow: Flow<Boolean>       = store.data.map { it[AUTO_HISTORY_ENABLED] ?: true }
     val manualCheckpointsEnabledFlow: Flow<Boolean> = store.data.map { it[MANUAL_CHECKPOINTS_ENABLED] ?: true }
@@ -225,6 +238,12 @@ class ScribeDataStore(private val context: Context) {
     }
 
     suspend fun setPinnedJson(json: String) = store.edit { it[PINNED_JSON] = json }
+
+    // Companion panel write functions
+    suspend fun setPinnedTopJson(json: String)    = store.edit { it[PINNED_TOP_JSON]    = json }
+    suspend fun setPinnedBottomJson(json: String) = store.edit { it[PINNED_BOTTOM_JSON] = json }
+    suspend fun setCompanionTabBarBottom(v: Boolean) = store.edit { it[COMPANION_TAB_BAR_BOTTOM]   = v }
+    suspend fun setCompanionSplitHorizontal(v: Boolean) = store.edit { it[COMPANION_SPLIT_HORIZONTAL] = v }
 
     suspend fun saveBookGoal(bookId: String, goal: BookGoal) = store.edit {
         it[bookGoalKey(bookId)] = AppJson.encodeToString(goal)

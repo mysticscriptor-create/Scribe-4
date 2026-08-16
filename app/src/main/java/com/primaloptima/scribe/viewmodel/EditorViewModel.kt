@@ -80,6 +80,34 @@ class EditorViewModel(
     private val _pinnedBottomIndex = MutableStateFlow(0)
     val pinnedBottomIndex: StateFlow<Int> = _pinnedBottomIndex.asStateFlow()
 
+    // ── Companion panel UI prefs (persisted) ──────────────────────────────────
+    val companionTabBarBottom: StateFlow<Boolean> = dataStore.companionTabBarBottomFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    val companionSplitHorizontal: StateFlow<Boolean> = dataStore.companionSplitHorizontalFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setCompanionTabBarBottom(v: Boolean) {
+        viewModelScope.launch { dataStore.setCompanionTabBarBottom(v) }
+    }
+
+    fun setCompanionSplitHorizontal(v: Boolean) {
+        viewModelScope.launch { dataStore.setCompanionSplitHorizontal(v) }
+    }
+
+    // ── Pinned notes helper: save to DataStore ────────────────────────────────
+    private fun persistPinnedTop() {
+        viewModelScope.launch {
+            dataStore.setPinnedTopJson(AppJson.encodeToString(_pinnedTopNotes.value))
+        }
+    }
+
+    private fun persistPinnedBottom() {
+        viewModelScope.launch {
+            dataStore.setPinnedBottomJson(AppJson.encodeToString(_pinnedBottomNotes.value))
+        }
+    }
+
     fun addPinnedTop(noteId: String) {
         val list = _pinnedTopNotes.value.toMutableList()
         if (!list.contains(noteId)) {
@@ -89,6 +117,7 @@ class EditorViewModel(
         } else {
             _pinnedTopIndex.value = list.indexOf(noteId)
         }
+        persistPinnedTop()
     }
 
     fun removePinnedTop(noteId: String) {
@@ -97,6 +126,7 @@ class EditorViewModel(
         _pinnedTopNotes.value = list
         val currIdx = _pinnedTopIndex.value
         _pinnedTopIndex.value = if (list.isEmpty()) 0 else currIdx.coerceIn(0, list.size - 1)
+        persistPinnedTop()
     }
 
     fun prevPinnedTop() {
@@ -113,6 +143,18 @@ class EditorViewModel(
         _pinnedTopIndex.value = if (curr < list.size - 1) curr + 1 else 0
     }
 
+    /** Swap top & bottom pinned slot contents. */
+    fun swapPinnedSlots() {
+        val oldTop    = _pinnedTopNotes.value
+        val oldBottom = _pinnedBottomNotes.value
+        _pinnedTopNotes.value    = oldBottom
+        _pinnedBottomNotes.value = oldTop
+        _pinnedTopIndex.value    = 0
+        _pinnedBottomIndex.value = 0
+        persistPinnedTop()
+        persistPinnedBottom()
+    }
+
     fun addPinnedBottom(noteId: String) {
         val list = _pinnedBottomNotes.value.toMutableList()
         if (!list.contains(noteId)) {
@@ -122,6 +164,7 @@ class EditorViewModel(
         } else {
             _pinnedBottomIndex.value = list.indexOf(noteId)
         }
+        persistPinnedBottom()
     }
 
     fun removePinnedBottom(noteId: String) {
@@ -130,6 +173,7 @@ class EditorViewModel(
         _pinnedBottomNotes.value = list
         val currIdx = _pinnedBottomIndex.value
         _pinnedBottomIndex.value = if (list.isEmpty()) 0 else currIdx.coerceIn(0, list.size - 1)
+        persistPinnedBottom()
     }
 
     fun prevPinnedBottom() {
@@ -274,6 +318,29 @@ class EditorViewModel(
                 _theme.value = themeManager.allThemes()
                     .firstOrNull { it.id == themeId }
                     ?: DefaultThemes.all.first()
+            }
+        }
+        // Restore persisted pinned note IDs on startup
+        viewModelScope.launch {
+            dataStore.pinnedTopJsonFlow.collectLatest { json ->
+                if (!json.isNullOrBlank()) {
+                    try {
+                        val ids = AppJson.decodeFromString<List<String>>(json)
+                        _pinnedTopNotes.value = ids
+                        _pinnedTopIndex.value = if (ids.isEmpty()) 0 else _pinnedTopIndex.value.coerceIn(0, ids.size - 1)
+                    } catch (_: Exception) { }
+                }
+            }
+        }
+        viewModelScope.launch {
+            dataStore.pinnedBottomJsonFlow.collectLatest { json ->
+                if (!json.isNullOrBlank()) {
+                    try {
+                        val ids = AppJson.decodeFromString<List<String>>(json)
+                        _pinnedBottomNotes.value = ids
+                        _pinnedBottomIndex.value = if (ids.isEmpty()) 0 else _pinnedBottomIndex.value.coerceIn(0, ids.size - 1)
+                    } catch (_: Exception) { }
+                }
             }
         }
         loadExternalRoot()
