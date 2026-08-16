@@ -45,11 +45,11 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import com.primaloptima.scribe.ui.components.ScribeCard
 import com.primaloptima.scribe.ui.components.ScribeSingleFab
+import com.primaloptima.scribe.ui.components.ScribeTopBar
 import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
-import com.primaloptima.scribe.ui.theme.frostedBar
 import com.primaloptima.scribe.ui.theme.frostedContainerColor
 import com.primaloptima.scribe.util.BitmapBlur
 import com.primaloptima.scribe.viewmodel.SheetsViewModel
@@ -166,15 +166,10 @@ fun SheetsScreen(
     Scaffold(
         contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.ime),
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                modifier = Modifier.frostedBar(hazeState),
-                title = { Text("World Building Sheets", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                }
+            ScribeTopBar(
+                title             = "World Building Sheets",
+                navigationIcon    = Icons.AutoMirrored.Filled.ArrowBack,
+                onNavigationClick = onBack
             )
         },
         floatingActionButton = {

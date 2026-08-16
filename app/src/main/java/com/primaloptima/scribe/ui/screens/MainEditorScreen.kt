@@ -44,12 +44,13 @@ import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
 import com.primaloptima.scribe.ui.components.ScribeSingleFab
+import com.primaloptima.scribe.ui.components.ScribeEditorTopBar
+import com.primaloptima.scribe.ui.components.ScribeBarAction
 import com.primaloptima.scribe.ui.theme.frostedFab
 import com.primaloptima.scribe.ui.theme.frostedPanel
 import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.frostedContainerColor
 import com.primaloptima.scribe.ui.theme.frostedCard
-import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
 import com.primaloptima.scribe.ui.theme.LocalAppTheme
 import com.primaloptima.scribe.ui.theme.ScribeColorScheme
 import com.primaloptima.scribe.util.BitmapBlur
@@ -604,119 +605,53 @@ fun MainEditorScreen(
                                 containerColor      = Color.Transparent,
                                 contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.ime),
                                 topBar = {
-                                    CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
-                                        if (!zenMode) {
-                                            Column {
-                                                TopAppBar(
-                                                    colors = TopAppBarDefaults.topAppBarColors(
-                                                        containerColor             = Color.Transparent,
-                                                        titleContentColor          = MaterialTheme.colorScheme.onSurface,
-                                                        actionIconContentColor     = MaterialTheme.colorScheme.primary,
-                                                        navigationIconContentColor = MaterialTheme.colorScheme.primary
-                                                    ),
-                                                    modifier       = Modifier.frostedBar(hazeState),
-                                                    navigationIcon = {
-                                                        IconButton(onClick = { scope.launch { leftDrawerState.open() } }) {
-                                                            Icon(Icons.Default.Menu, contentDescription = "Vault Explorer")
-                                                        }
-                                                    },
-                                                    title = {
-                                                        val (titleColor, titleModifier) = rememberAdaptiveTextColor(
-                                                            fallback = MaterialTheme.colorScheme.onSurface
-                                                        )
-                                                        Text(
-                                                            activeNote?.name ?: "Scribe Editor",
-                                                            fontWeight = FontWeight.Bold,
-                                                            fontSize   = 18.sp,
-                                                            maxLines   = 1,
-                                                            overflow   = TextOverflow.Ellipsis,
-                                                            color      = titleColor,
-                                                            modifier   = titleModifier.clickable {
-                                                                if (activeNote != null)
-                                                                    scope.launch { captureForDialog { showRenameDialog = true } }
-                                                            }
-                                                        )
-                                                    },
-                                                    actions = {
-                                                        IconButton(onClick = {
-                                                            scope.launch { rightPagerState.animateScrollToPage(1) }
-                                                        }) {
-                                                            Icon(Icons.Default.Dock, contentDescription = "Outline & Pinned Notes")
-                                                        }
-                                                        IconButton(onClick = { showFindBar = !showFindBar }) {
-                                                            Icon(Icons.Default.Search, contentDescription = "Find")
-                                                        }
-                                                        IconButton(onClick = {
-                                                            val text = soraEditorRef?.text?.toString() ?: ""
-                                                            editorVm.saveManualSnapshot(text)
-                                                            Toast.makeText(context, "Checkpoint saved", Toast.LENGTH_SHORT).show()
-                                                        }) {
-                                                            Icon(Icons.Default.BookmarkAdd, contentDescription = "Save Checkpoint")
-                                                        }
-                                                        var showMenu by remember { mutableStateOf(false) }
-                                                        IconButton(onClick = { showMenu = true }) {
-                                                            Icon(Icons.Default.MoreVert, contentDescription = "Menu")
-                                                        }
-                                                        DropdownMenu(
-                                                            expanded          = showMenu,
-                                                            onDismissRequest  = { showMenu = false },
-                                                            containerColor    = LocalSolidSurface.current
-                                                        ) {
-                                                            DropdownMenuItem(
-                                                                text    = { Text("Open as Floating Reference Window") },
-                                                                onClick = {
-                                                                    showMenu = false
-                                                                    activeNote?.let { editorVm.openFloatingWindow(it.id) }
-                                                                }
-                                                            )
-                                                            HorizontalDivider()
-                                                            DropdownMenuItem(
-                                                                text    = { Text("Export as TXT") },
-                                                                onClick = { showMenu = false; activeNote?.let { ExportHelper.shareNote(context, it, "txt") } }
-                                                            )
-                                                            DropdownMenuItem(
-                                                                text    = { Text("Export as Markdown") },
-                                                                onClick = { showMenu = false; activeNote?.let { ExportHelper.shareNote(context, it, "md") } }
-                                                            )
-                                                            DropdownMenuItem(
-                                                                text    = { Text("Export as HTML") },
-                                                                onClick = { showMenu = false; activeNote?.let { ExportHelper.shareNote(context, it, "html") } }
-                                                            )
-                                                            DropdownMenuItem(
-                                                                text    = { Text("Export as PDF") },
-                                                                onClick = { showMenu = false; activeNote?.let { ExportHelper.shareNote(context, it, "pdf") } }
-                                                            )
-                                                            HorizontalDivider()
-                                                            DropdownMenuItem(
-                                                                text    = { Text("Version History") },
-                                                                onClick = {
-                                                                    showMenu = false
-                                                                    editorVm.flushContent(soraEditorRef?.text?.toString() ?: "")
-                                                                    onOpenHistory()
-                                                                }
-                                                            )
-                                                            DropdownMenuItem(
-                                                                text    = { Text("Shortcuts") },
-                                                                onClick = { showMenu = false; onOpenShortcuts() }
-                                                            )
-                                                            DropdownMenuItem(
-                                                                text    = { Text("User Guide") },
-                                                                onClick = { showMenu = false; onOpenGuide() }
-                                                            )
-                                                            DropdownMenuItem(
-                                                                text    = { Text("Settings") },
-                                                                onClick = { showMenu = false; onOpenSettings() }
-                                                            )
-                                                        }
-                                                    }
-                                                )
-                                                LinearProgressIndicator(
-                                                    progress   = { goalProgress },
-                                                    modifier   = Modifier.fillMaxWidth().height(3.dp),
-                                                    color      = MaterialTheme.colorScheme.primary,
-                                                    trackColor = MaterialTheme.colorScheme.surfaceVariant
-                                                )
+                                    var showMenu by remember { mutableStateOf(false) }
+                                    Box {
+                                        ScribeEditorTopBar(
+                                            title          = activeNote?.name,
+                                            onNavClick     = { scope.launch { leftDrawerState.open() } },
+                                            onTitleClick   = {
+                                                if (activeNote != null)
+                                                    scope.launch { captureForDialog { showRenameDialog = true } }
+                                            },
+                                            navigationIcon = Icons.Default.Menu,
+                                            visible        = !zenMode,
+                                            actions        = listOf(
+                                                ScribeBarAction(Icons.Default.Dock,        "Outline & Pinned Notes") { scope.launch { rightPagerState.animateScrollToPage(1) } },
+                                                ScribeBarAction(Icons.Default.Search,      "Find")                   { showFindBar = !showFindBar },
+                                                ScribeBarAction(Icons.Default.BookmarkAdd, "Save Checkpoint")        {
+                                                    editorVm.saveManualSnapshot(soraEditorRef?.text?.toString() ?: "")
+                                                    Toast.makeText(context, "Checkpoint saved", Toast.LENGTH_SHORT).show()
+                                                },
+                                                ScribeBarAction(Icons.Default.MoreVert,    "Menu")                   { showMenu = true },
+                                            ),
+                                            extraContent = {
+                                                if (!zenMode) {
+                                                    LinearProgressIndicator(
+                                                        progress   = { goalProgress },
+                                                        modifier   = Modifier.fillMaxWidth().height(3.dp),
+                                                        color      = MaterialTheme.colorScheme.primary,
+                                                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                                                    )
+                                                }
                                             }
+                                        )
+                                        DropdownMenu(
+                                            expanded         = showMenu,
+                                            onDismissRequest = { showMenu = false },
+                                            containerColor   = LocalSolidSurface.current
+                                        ) {
+                                            DropdownMenuItem(text = { Text("Open as Floating Reference Window") }, onClick = { showMenu = false; activeNote?.let { editorVm.openFloatingWindow(it.id) } })
+                                            HorizontalDivider()
+                                            DropdownMenuItem(text = { Text("Export as TXT") },      onClick = { showMenu = false; activeNote?.let { ExportHelper.shareNote(context, it, "txt") } })
+                                            DropdownMenuItem(text = { Text("Export as Markdown") }, onClick = { showMenu = false; activeNote?.let { ExportHelper.shareNote(context, it, "md") } })
+                                            DropdownMenuItem(text = { Text("Export as HTML") },     onClick = { showMenu = false; activeNote?.let { ExportHelper.shareNote(context, it, "html") } })
+                                            DropdownMenuItem(text = { Text("Export as PDF") },      onClick = { showMenu = false; activeNote?.let { ExportHelper.shareNote(context, it, "pdf") } })
+                                            HorizontalDivider()
+                                            DropdownMenuItem(text = { Text("Version History") }, onClick = { showMenu = false; editorVm.flushContent(soraEditorRef?.text?.toString() ?: ""); onOpenHistory() })
+                                            DropdownMenuItem(text = { Text("Shortcuts") },       onClick = { showMenu = false; onOpenShortcuts() })
+                                            DropdownMenuItem(text = { Text("User Guide") },      onClick = { showMenu = false; onOpenGuide() })
+                                            DropdownMenuItem(text = { Text("Settings") },        onClick = { showMenu = false; onOpenSettings() })
                                         }
                                     }
                                 },
