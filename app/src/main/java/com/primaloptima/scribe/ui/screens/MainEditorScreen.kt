@@ -122,16 +122,9 @@ fun MainEditorScreen(
     val leftDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
     // ── Right companion pager ─────────────────────────────────────────────────
-    // Replaces the old right ModalNavigationDrawer.
-    // Page 0 = editor  |  Page 1 = companion panel.
-    // userScrollEnabled = false: the pointerInput gesture router below owns all
-    // swipe logic and drives the pager programmatically. This prevents the pager
-    // from intercepting Sora's horizontal text-selection gestures.
     val rightPagerState  = rememberPagerState(initialPage = 0, pageCount = { 2 })
     val isCompanionOpen by remember { derivedStateOf { rightPagerState.currentPage == 1 } }
 
-    // Snap left drawer to Closed on first composition — prevents the 1-frame flash
-    // during NavDisplay slide-in transitions (drawer Animatables init at offset 0).
     LaunchedEffect(Unit) { leftDrawerState.snapTo(DrawerValue.Closed) }
 
     // ── Frosted-glass blur bitmaps (pre-API-31 fallback) ─────────────────────
@@ -204,7 +197,7 @@ fun MainEditorScreen(
     val pinnedBottomIndex  by editorVm.pinnedBottomIndex.collectAsStateWithLifecycle()
 
     // ── Local UI state ────────────────────────────────────────────────────────
-    var rightPanelTab   by remember { mutableIntStateOf(0) }   // 0: Pinned  1: Outline
+    var rightPanelTab   by remember { mutableIntStateOf(0) }
     var leftPanelTab    by remember { mutableIntStateOf(0) }
     var leftDrawerMode  by remember { mutableStateOf("Current") }
     var leftSearchQuery by remember { mutableStateOf("") }
@@ -222,7 +215,6 @@ fun MainEditorScreen(
         LaunchedEffect(anyDialogOpen) { if (!anyDialogOpen) dialogOneShotBitmap = null }
     }
 
-    // Capture blur bitmap before opening a dialog (pre-API-31 frosted glass).
     val captureForDialog: suspend (() -> Unit) -> Unit = { openDialog ->
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             val raw = BitmapBlur.captureOnly(view)
@@ -238,7 +230,6 @@ fun MainEditorScreen(
     var loadedNoteId   by rememberSaveable { mutableStateOf<String?>(null) }
     val expandedTreeState = remember { mutableStateMapOf<String, Boolean>() }
 
-    // Floating word-count pill
     var pillMode     by remember { mutableIntStateOf(0) }
     var pillOffsetX  by remember { mutableFloatStateOf(0f) }
     var pillOffsetY  by remember { mutableFloatStateOf(0f) }
@@ -293,7 +284,6 @@ fun MainEditorScreen(
     }
 
     // ── Back-press handlers ───────────────────────────────────────────────────
-    // Companion panel takes priority: back-press closes it before the left drawer.
     if (isCompanionOpen) {
         BackHandler { scope.launch { rightPagerState.animateScrollToPage(0) } }
     }
@@ -302,12 +292,6 @@ fun MainEditorScreen(
     }
 
     // ── Gesture router ────────────────────────────────────────────────────────
-    // Handles two gestures and passes everything else through untouched:
-    //   1. Double-tap anywhere → toggle zen mode (consumes DOWN to block Sora word-select).
-    //   2. Edge swipe from left  (≤ 20 dp) → open left vault drawer.
-    //      Edge swipe from right (≤ 20 dp) → animate pager to companion panel (page 1).
-    // When isCompanionOpen = true, edge-swipe triggers are suppressed entirely so
-    // the panel's LazyColumn / Sora viewer can scroll without conflict.
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -433,7 +417,7 @@ fun MainEditorScreen(
         // ── Left vault drawer ─────────────────────────────────────────────────
         ModalNavigationDrawer(
             drawerState    = leftDrawerState,
-            gesturesEnabled = false,   // gesture router above owns all swipe logic
+            gesturesEnabled = false,
             drawerContent  = {
                 CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap) {
                     ModalDrawerSheet(
@@ -598,14 +582,12 @@ fun MainEditorScreen(
                 }
             }
         ) {
-            val hazeState = LocalHazeState.current
+            // FIX: capture hazeState as non-null here; it's only nullable in the
+            // CompositionLocal but we know it is provided at this point in the tree.
+            val hazeState = LocalHazeState.current ?: dev.chrisbanes.haze.HazeState()
 
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
 
-                // ── Two-page horizontal pager ─────────────────────────────────
-                // beyondViewportPageCount = 1: both pages stay composed so the
-                // transition to the companion panel is always instant (no jank
-                // while Sora or the panel LazyColumn composes for the first time).
                 HorizontalPager(
                     state                = rightPagerState,
                     modifier             = Modifier.fillMaxSize(),
@@ -656,7 +638,6 @@ fun MainEditorScreen(
                                                         )
                                                     },
                                                     actions = {
-                                                        // Open companion panel
                                                         IconButton(onClick = {
                                                             scope.launch { rightPagerState.animateScrollToPage(1) }
                                                         }) {
@@ -729,7 +710,6 @@ fun MainEditorScreen(
                                                         }
                                                     }
                                                 )
-                                                // Word-goal progress bar (3 dp — minimal, non-intrusive)
                                                 LinearProgressIndicator(
                                                     progress   = { goalProgress },
                                                     modifier   = Modifier.fillMaxWidth().height(3.dp),
@@ -879,7 +859,6 @@ fun MainEditorScreen(
                                                         scheme.setColor(EditorColorScheme.LINE_NUMBER_BACKGROUND, bgArgb)
                                                         scheme.setColor(EditorColorScheme.LINE_NUMBER,            bgArgb)
                                                         editor.colorScheme = scheme
-                                                        // Text-action popup styling
                                                         val density    = context.resources.displayMetrics.density
                                                         val cornerPx   = 24f * density
                                                         val accentArgb = android.graphics.Color.parseColor(theme.colors.accent)
@@ -921,7 +900,6 @@ fun MainEditorScreen(
                                                 modifier = Modifier.fillMaxSize()
                                             )
 
-                                            // Floating word-count pill + zen FAB
                                             CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
                                                 Box(
                                                     modifier = Modifier
@@ -1121,32 +1099,11 @@ fun MainEditorScreen(
                 )
             }
         }
-    }         // end ModalNavigationDrawer content
-        }     // end ModalNavigationDrawer
-    }         // end outer Box
+    } // end outer Box
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Right Companion Panel
-//
-// Full-screen page accessible via left-swipe from the editor (or the Dock icon).
-//
-// Top bar design:
-//   [›] Title          [Pinned | Outline]
-//   ──────────────────────────────────────
-// The › chevron closes the panel and snaps back to the editor.
-// The pill switcher is more refined than PrimaryTabRow in a narrow bar — it uses
-// a capsule container with a floating selected state, matching Scribe's surface
-// language.
-//
-// Tab 0 — Pinned Notes: two equal reference slots (weight(1f) each), so both
-//   get the full vertical real estate instead of being cramped in a 320 dp drawer.
-//   Each slot shows either a read-only Sora viewer or an empty-state "pick a note"
-//   prompt. The divider between slots uses a subtle "B" badge instead of a label.
-//
-// Tab 1 — Outline: heading navigator with indentation by level, H-badge for each
-//   entry, bold/large style for top-level headings, tapping jumps the main editor
-//   cursor and closes the panel.
 // ─────────────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1192,7 +1149,6 @@ private fun RightCompanionPanel(
                         modifier          = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Back chevron — closes the companion panel
                         IconButton(onClick = onClose) {
                             Icon(
                                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -1209,7 +1165,6 @@ private fun RightCompanionPanel(
                             modifier   = Modifier.weight(1f)
                         )
 
-                        // Pill-style tab switcher
                         Surface(
                             shape    = RoundedCornerShape(50),
                             color    = MaterialTheme.colorScheme.surfaceVariant,
@@ -1229,13 +1184,11 @@ private fun RightCompanionPanel(
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (rightPanelTab) {
 
-                // ── Pinned Notes ─────────────────────────────────────────────
                 0 -> {
                     Column(
                         modifier             = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalArrangement  = Arrangement.spacedBy(10.dp)
                     ) {
-                        // Slot A
                         PinnedNoteSlot(
                             modifier          = Modifier.weight(1f),
                             pinnedIds         = pinnedTopNotes,
@@ -1252,7 +1205,6 @@ private fun RightCompanionPanel(
                             hazeState         = hazeState,
                         )
 
-                        // Slot label divider
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
                             Surface(
@@ -1271,7 +1223,6 @@ private fun RightCompanionPanel(
                             HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
                         }
 
-                        // Slot B
                         PinnedNoteSlot(
                             modifier          = Modifier.weight(1f),
                             pinnedIds         = pinnedBottomNotes,
@@ -1290,7 +1241,6 @@ private fun RightCompanionPanel(
                     }
                 }
 
-                // ── Outline ──────────────────────────────────────────────────
                 1 -> {
                     if (outline.isEmpty()) {
                         Box(
@@ -1358,7 +1308,6 @@ private fun RightCompanionPanel(
                                     verticalAlignment     = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    // Heading-level badge
                                     Surface(
                                         shape = RoundedCornerShape(5.dp),
                                         color = if (isTopLevel) MaterialTheme.colorScheme.primary
@@ -1421,10 +1370,6 @@ private fun PillTab(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 // ── Pinned note slot ──────────────────────────────────────────────────────────
-// One half of the dual-reference view.
-// Empty state → "Pin a reference note" prompt with a circle-plus icon.
-// Filled state → read-only Sora viewer + compact title bar (name, page indicator,
-//   prev/next, swap, edit-in-main, unpin).
 @Composable
 private fun PinnedNoteSlot(
     modifier     : Modifier = Modifier,
@@ -1456,7 +1401,6 @@ private fun PinnedNoteSlot(
             .frostedCard(hazeState, RoundedCornerShape(16.dp), applyFallbackBackground = true)
     ) {
         if (currentNote == null) {
-            // ── Empty state ───────────────────────────────────────────────────
             Column(
                 modifier            = Modifier.fillMaxSize().clickable(onClick = onPick),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -1483,9 +1427,7 @@ private fun PinnedNoteSlot(
                 Text("Tap to browse your vault", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
             }
         } else {
-            // ── Filled state ──────────────────────────────────────────────────
             Column(Modifier.fillMaxSize()) {
-                // Title bar
                 Row(
                     modifier          = Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -1529,7 +1471,6 @@ private fun PinnedNoteSlot(
                     color    = MaterialTheme.colorScheme.outlineVariant
                 )
 
-                // Read-only Sora viewer
                 AndroidView(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     factory  = { ctx ->
