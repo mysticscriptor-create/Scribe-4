@@ -16,16 +16,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '21'
           distribution: 'temurin'
 
       # ── Stable debug keystore ───────────────────────────────────────────────
-      # The cache key is fixed (scribe-debug-keystore-v1) so every build after
-      # the first one reuses the exact same .jks file and therefore the exact
-      # same APK signature.  Install-over-update works without uninstalling.
-      # To intentionally rotate the key (e.g. after a security event) bump v1→v2.
       - name: Restore debug keystore from cache
         id: ks-cache
         uses: actions/cache@v4
@@ -49,37 +45,36 @@ jobs:
           echo "New debug keystore created and cached."
 
       # ── Build ───────────────────────────────────────────────────────────────
-      # validate-wrappers: false because this workflow calls the installed
-      # `gradle` binary directly (not ./gradlew), so the wrapper JAR is never
-      # used at runtime.  Validating it would just block builds when the JAR
-      # hash isn't in GitHub's allowlist yet.
-      - name: Setup Gradle 9.5.1
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '9.5.1'
           validate-wrappers: false
 
       - name: Grant execute permission for gradlew
-        run: chmod +x gradlew 2>/dev/null || true
+        run: chmod +x gradlew
 
-      - name: Build release APK
-        run: gradle app:assembleRelease --no-daemon
-
-      - name: Upload release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: scribe-release-apk
-          path: app/build/outputs/apk/release/app-release*.apk
-          retention-days: 30
-
-      - name: Build debug APK (manual trigger only)
-        if: github.event_name == 'workflow_dispatch'
-        run: gradle app:assembleDebug --no-daemon
+      # Push / PR: debug build — no R8, no ProGuard, fastest possible compile.
+      # Manual trigger: release build with full R8 for a distributable APK.
+      - name: Build debug APK (push / PR)
+        if: github.event_name != 'workflow_dispatch'
+        run: ./gradlew app:assembleDebug --no-daemon --parallel --build-cache
 
       - name: Upload debug APK
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name != 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: scribe-debug-apk
           path: app/build/outputs/apk/debug/app-debug*.apk
           retention-days: 7
+
+      - name: Build release APK (manual trigger only)
+        if: github.event_name == 'workflow_dispatch'
+        run: ./gradlew app:assembleRelease --no-daemon --parallel --build-cache
+
+      - name: Upload release APK
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: scribe-release-apk
+          path: app/build/outputs/apk/release/app-release*.apk
+          retention-days: 30
