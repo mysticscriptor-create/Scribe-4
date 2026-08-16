@@ -91,7 +91,6 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.Dp
-import androidx.core.graphics.drawable.toBitmap
 import coil3.ImageLoader
 import coil3.request.SuccessResult
 import coil3.request.allowHardware
@@ -890,7 +889,7 @@ private fun BookInfoHeader(
                     .build()
                 val result = loader.execute(request)
                 if (result is SuccessResult) {
-                    val bmp    = result.image.toBitmap()
+                    val bmp    = (result.image as? coil3.BitmapImage)?.bitmap ?: return@withContext
                     // Sample a grid of pixels and average them for a dominant tone
                     var r = 0L; var g = 0L; var b = 0L; var count = 0
                     val step = maxOf(1, bmp.width / 8)
