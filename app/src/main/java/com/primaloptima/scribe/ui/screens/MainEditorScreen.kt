@@ -1070,16 +1070,24 @@ private fun RightCompanionPanel(
     barBlurBitmap     : Bitmap?,
     hazeState         : dev.chrisbanes.haze.HazeState,
 ) {
+    // Provide barBlurBitmap as LocalOneShotBitmap for the entire panel so that
+    // frostedPanel + frostedBar read it on pre-API-31 devices (Haze handles
+    // API 31+ natively). This mirrors how the home screen drawer works.
+    CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .frostedPanel(hazeState)
+    ) {
     Scaffold(
         containerColor      = Color.Transparent,
         contentWindowInsets = WindowInsets.systemBars,
         topBar = {
-            CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .frostedBar(hazeState)
-                ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .frostedBar(hazeState)
+            ) {
                     Row(
                         modifier          = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -1113,7 +1121,6 @@ private fun RightCompanionPanel(
                     }
                     HorizontalDivider()
                 }
-            }
         }
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -1282,6 +1289,8 @@ private fun RightCompanionPanel(
             }
         }
     }
+    } // end Box (frostedPanel background)
+    } // end CompositionLocalProvider (LocalOneShotBitmap)
 }
 
 // ── Pill tab ──────────────────────────────────────────────────────────────────
@@ -1505,19 +1514,26 @@ private fun FileExplorerOverlayDialog(
 }
 
 @Composable
-private fun FormatButton(label: String, onClick: () -> Unit) {
+private fun FormatButton(
+    label      : String,
+    isSelected : Boolean = false,
+    onClick    : () -> Unit
+) {
     Surface(
-        shape    = RoundedCornerShape(6.dp),
-        color    = MaterialTheme.colorScheme.secondaryContainer,
-        modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onClick)
+        onClick      = onClick,
+        shape        = CircleShape,
+        color        = if (isSelected) MaterialTheme.colorScheme.primary
+                       else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+        contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary
+                       else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier     = Modifier.height(32.dp)
     ) {
-        Text(
-            text       = label,
-            fontSize   = 13.sp,
-            fontWeight = FontWeight.Medium,
-            color      = MaterialTheme.colorScheme.onSecondaryContainer,
-            modifier   = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-        )
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier         = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+        ) {
+            Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }
 
@@ -1526,6 +1542,7 @@ private fun FormatButton(label: String, onClick: () -> Unit) {
 private fun CodeEditor.applyFormat(open: String, close: String) {
     val cur = cursor
     if (cur.isSelected) {
+        // Wrap selected text in one operation so undo restores the original selection.
         val indexer  = text.indexer
         val startIdx = indexer.getCharIndex(cur.leftLine,  cur.leftColumn)
         val endIdx   = indexer.getCharIndex(cur.rightLine, cur.rightColumn)
@@ -1536,6 +1553,9 @@ private fun CodeEditor.applyFormat(open: String, close: String) {
             "$open$selected$close"
         )
     } else {
+        // No selection — insert both halves then place cursor precisely between them.
+        // text.insert gives us control over cursor placement without triggering
+        // Sora's own auto-pair (which would insert a duplicate closing character).
         val line = cur.leftLine
         val col  = cur.leftColumn
         text.insert(line, col, "$open$close")
@@ -1543,7 +1563,17 @@ private fun CodeEditor.applyFormat(open: String, close: String) {
     }
 }
 
-private fun CodeEditor.insertAtCursor(text: String) = this.insertText(text, 0)
+private fun CodeEditor.applyLinePrefix(prefix: String) {
+    // Insert prefix at the start of the current line, then shift cursor right.
+    val line = cursor.leftLine
+    text.insert(line, 0, prefix)
+    cursor.set(line, cursor.leftColumn + prefix.length)
+}
+
+private fun CodeEditor.insertAtCursor(str: String) {
+    // commitText routes through the IME pipeline so undo works correctly.
+    commitText(str)
+}
 
 private fun parseComposeColor(hex: String, fallback: Color): Color = try {
     Color(android.graphics.Color.parseColor(hex))
