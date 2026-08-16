@@ -9,19 +9,24 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
+      # ── Checkout ────────────────────────────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ── JDK ─────────────────────────────────────────────────────────────────
+      # Java 21 is correct for AGP 8.x / Gradle 9.x.
       - name: Set up JDK 21
         uses: actions/setup-java@v5
         with:
           java-version: '21'
           distribution: 'temurin'
 
-      # ── Stable debug keystore ───────────────────────────────────────────────
+      # ── Stable debug keystore ────────────────────────────────────────────────
+      # Cached so the signing identity never changes between builds; this means
+      # Android treats each new APK as an update rather than a fresh install.
       - name: Restore debug keystore from cache
         id: ks-cache
         uses: actions/cache@v4
@@ -44,37 +49,68 @@ jobs:
             -validity 10000
           echo "New debug keystore created and cached."
 
-      # ── Build ───────────────────────────────────────────────────────────────
+      # ── Gradle ──────────────────────────────────────────────────────────────
+      # gradle/actions v6 (released March 2026) is the current major version.
+      # It has two caching providers; we use the open-source "basic" provider
+      # (added in v6.1.0, April 2026) so no proprietary Gradle ToS applies.
+      # The basic provider caches Gradle User Home (dependencies, wrappers,
+      # kotlin-dsl, transforms) using @actions/cache under the MIT license —
+      # equivalent quality to v4 but on the new v6 infrastructure.
+      #
+      # validate-wrappers is intentionally disabled: v6 already validates the
+      # wrapper on every run by default, so the explicit flag is redundant.
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
-          validate-wrappers: false
+          cache-provider: basic
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # Push / PR: debug build — no R8, no ProGuard, fastest possible compile.
-      # Manual trigger: release build with full R8 for a distributable APK.
+      # ── Debug build (push / PR) ──────────────────────────────────────────────
+      # Flags explained:
+      #   --no-daemon          required on ephemeral CI runners; daemons are
+      #                        useless when the VM is destroyed after the job.
+      #   --parallel           lets Gradle run independent tasks concurrently.
+      #   --build-cache        reuses outputs from previous runs via the Gradle
+      #                        User Home cache restored by setup-gradle above.
+      #   --configuration-cache (new) skips the entire Gradle configuration
+      #                        phase on cache hits — typically saves 10-30 s on
+      #                        a warm build. Requires Gradle 8.6+; safe on 9.x.
       - name: Build debug APK (push / PR)
         if: github.event_name != 'workflow_dispatch'
-        run: ./gradlew app:assembleDebug --no-daemon --parallel --build-cache
+        run: |
+          ./gradlew app:assembleDebug \
+            --no-daemon \
+            --parallel \
+            --build-cache \
+            --configuration-cache
 
+      # Upload with compression-level 0 (no re-compression of the already-
+      # compressed APK) so the upload step is near-instant.
       - name: Upload debug APK
         if: github.event_name != 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: scribe-debug-apk
+          name: scribe-debug-${{ github.sha }}
           path: app/build/outputs/apk/debug/app-debug*.apk
           retention-days: 7
+          compression-level: 0
 
+      # ── Release build (manual trigger only) ────────────────────────────────
       - name: Build release APK (manual trigger only)
         if: github.event_name == 'workflow_dispatch'
-        run: ./gradlew app:assembleRelease --no-daemon --parallel --build-cache
+        run: |
+          ./gradlew app:assembleRelease \
+            --no-daemon \
+            --parallel \
+            --build-cache
 
       - name: Upload release APK
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: scribe-release-apk
+          name: scribe-release-${{ github.sha }}
           path: app/build/outputs/apk/release/app-release*.apk
           retention-days: 30
+          compression-level: 0

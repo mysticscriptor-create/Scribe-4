@@ -34,7 +34,6 @@ import androidx.compose.ui.res.painterResource
 import com.primaloptima.scribe.ui.theme.LocalAccentColor
 import android.graphics.Bitmap
 import android.os.Build
-import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.activity.ComponentActivity
 import com.primaloptima.scribe.ui.theme.LocalHazeState
@@ -42,10 +41,8 @@ import com.primaloptima.scribe.ui.theme.localHasBgImage
 import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
 import com.primaloptima.scribe.ui.theme.LocalBarBlurBitmap
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
-import com.primaloptima.scribe.ui.theme.frostedBar
 import com.primaloptima.scribe.ui.theme.frostedPanel
 import com.primaloptima.scribe.ui.theme.FrostedDialog
-import com.primaloptima.scribe.ui.theme.FrostedBarContent
 import com.primaloptima.scribe.ui.theme.FrostedPanelContent
 
 import androidx.compose.material3.LocalContentColor
@@ -73,6 +70,10 @@ import com.primaloptima.scribe.ui.components.ScribeExtendedFab
 import com.primaloptima.scribe.ui.components.ScribeSpeedDialFab
 import com.primaloptima.scribe.ui.components.SpeedDialItem
 import com.primaloptima.scribe.ui.components.ScribeFabTokens
+import com.primaloptima.scribe.ui.components.ScribeTopBar
+import com.primaloptima.scribe.ui.components.ScribeNavBar
+import com.primaloptima.scribe.ui.components.ScribeNavItem
+import com.primaloptima.scribe.ui.components.ScribeBarAction
 import com.primaloptima.scribe.*
 import com.primaloptima.scribe.R
 import com.primaloptima.scribe.data.Book
@@ -127,8 +128,6 @@ fun HomeScreen(
     }
     SideEffect {
         val window = (view.context as? ComponentActivity)?.window ?: return@SideEffect
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.navigationBarColor = android.graphics.Color.TRANSPARENT
         WindowInsetsControllerCompat(window, view).isAppearanceLightNavigationBars = !isDarkTheme
     }
 
@@ -455,109 +454,63 @@ fun HomeScreen(
             containerColor = Color.Transparent,
             modifier = Modifier.then(swipeGestureModifier),
             topBar = {
-                // On API < 31 frostedBar needs LocalOneShotBitmap to be non-null.
-                // LocalBarBlurBitmap is provided by ScribeTheme from the Coil bitmap —
-                // no screen capture needed; already available when the image is loaded.
-                CompositionLocalProvider(LocalOneShotBitmap provides LocalBarBlurBitmap.current) {
-                FrostedBarContent {
-
-                // ── Full-screen search overlay ──────────────────────────────
-                // When search is active, a full overlay slides down from the top
-                // so the user has a proper wide search field instead of a cramped
-                // one inside the narrow top bar.
+                // Full-screen search overlay — slides down from top when searching.
                 AnimatedVisibility(
                     visible = isSearching,
                     enter = slideInVertically(initialOffsetY = { -it }, animationSpec = tween(220)) + fadeIn(tween(220)),
-                    exit = slideOutVertically(targetOffsetY = { -it }, animationSpec = tween(180)) + fadeOut(tween(180))
+                    exit  = slideOutVertically(targetOffsetY = { -it }, animationSpec = tween(180)) + fadeOut(tween(180))
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .statusBarsPadding()
-                            .padding(top = 8.dp)
+                            .padding(top = 8.dp, bottom = 8.dp)
                             .padding(horizontal = 12.dp)
-                            .padding(bottom = 8.dp)
                     ) {
                         OutlinedTextField(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
                             placeholder = { Text("Search titles, notes, folders...") },
                             singleLine = true,
-                            leadingIcon = {
-                                Icon(Icons.Default.Search, contentDescription = null)
-                            },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                             trailingIcon = {
                                 IconButton(onClick = {
-                                    if (searchQuery.isNotEmpty()) searchQuery = ""
-                                    else isSearching = false
-                                }) {
-                                    Icon(Icons.Default.Clear, contentDescription = "Clear")
-                                }
+                                    if (searchQuery.isNotEmpty()) searchQuery = "" else isSearching = false
+                                }) { Icon(Icons.Default.Clear, contentDescription = "Clear") }
                             },
                             shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(54.dp)
+                            modifier = Modifier.fillMaxWidth().height(54.dp)
                         )
                     }
                 }
 
-                TopAppBar(
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.Transparent
-                    ),
-                    windowInsets = WindowInsets(0.dp),
-                    modifier = Modifier
-                        .frostedBar(hazeState)
-                        .statusBarsPadding()
-                        .height(52.dp),
-                    title = {
-                        val (titleColor, titleModifier) = rememberAdaptiveTextColor(
-                            fallback = MaterialTheme.colorScheme.onSurface
+                // Shared bar — only visible when NOT searching.
+                // DropdownMenu for sort/grid is hoisted here since ScribeTopBar
+                // delivers the MoreVert click via ScribeBarAction.onClick.
+                if (!isSearching) {
+                    var showSortMenu by remember { mutableStateOf(false) }
+                    Box {
+                        ScribeTopBar(
+                            title             = "Scribe",
+                            navigationIcon    = Icons.Default.Menu,
+                            onNavigationClick = { scope.launch { drawerState.open() } },
+                            actions = buildList {
+                                add(ScribeBarAction(Icons.Default.Search, "Search") { isSearching = true })
+                                if (selectedNavTab == 1) {
+                                    add(ScribeBarAction(
+                                        if (isGridMode) Icons.Filled.ViewList else Icons.Default.GridView,
+                                        "Toggle view"
+                                    ) { isGridMode = !isGridMode })
+                                    add(ScribeBarAction(Icons.Default.MoreVert, "More options") { showSortMenu = true })
+                                }
+                            }
                         )
-                        Text(
-                            "Scribe",
-                            fontWeight = FontWeight.Bold,
-                            color = titleColor,
-                            modifier = titleModifier
-                        )
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = {
-                            scope.launch { drawerState.open() }
-                        }) {
-                            val (iconColor, iconModifier) = rememberAdaptiveTextColor(
-                                fallback = MaterialTheme.colorScheme.primary
-                            )
-                            Icon(
-                                Icons.Default.Menu,
-                                contentDescription = "Menu",
-                                tint = iconColor,
-                                modifier = iconModifier
-                            )
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = { isSearching = true }) {
-                            Icon(Icons.Default.Search, contentDescription = "Search")
-                        }
                         if (selectedNavTab == 1) {
-                            IconButton(onClick = { isGridMode = !isGridMode }) {
-                                Icon(
-                                    if (isGridMode) Icons.Filled.ViewList else Icons.Default.GridView,
-                                    contentDescription = "Toggle Grid/List View"
-                                )
-                            }
-                            var showSortMenu by remember { mutableStateOf(false) }
-                            IconButton(onClick = { showSortMenu = true }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "More Options")
-                            }
                             DropdownMenu(
-                                expanded = showSortMenu,
+                                expanded         = showSortMenu,
                                 onDismissRequest = { showSortMenu = false },
-                                containerColor = LocalSolidSurface.current
+                                containerColor   = LocalSolidSurface.current
                             ) {
-                                // Grid column toggle (only shown in grid mode)
                                 if (isGridMode) {
                                     DropdownMenuItem(
                                         text = { Text(if (gridColumns == 2) "3 Columns" else "2 Columns") },
@@ -570,95 +523,29 @@ fun HomeScreen(
                                     )
                                     HorizontalDivider()
                                 }
-                                DropdownMenuItem(
-                                    text = { Text("Date Updated") },
-                                    onClick = {
-                                        booksVm.setSortMode(BooksViewModel.SortMode.DATE_UPDATED)
-                                        showSortMenu = false
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Date Created") },
-                                    onClick = {
-                                        booksVm.setSortMode(BooksViewModel.SortMode.DATE_CREATED)
-                                        showSortMenu = false
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Title (A-Z)") },
-                                    onClick = {
-                                        booksVm.setSortMode(BooksViewModel.SortMode.TITLE_AZ)
-                                        showSortMenu = false
-                                    }
-                                )
+                                DropdownMenuItem(text = { Text("Date Updated") }, onClick = { booksVm.setSortMode(BooksViewModel.SortMode.DATE_UPDATED); showSortMenu = false })
+                                DropdownMenuItem(text = { Text("Date Created") }, onClick = { booksVm.setSortMode(BooksViewModel.SortMode.DATE_CREATED); showSortMenu = false })
+                                DropdownMenuItem(text = { Text("Title (A-Z)") },  onClick = { booksVm.setSortMode(BooksViewModel.SortMode.TITLE_AZ);     showSortMenu = false })
                             }
                         }
                     }
-                )
-                } // end FrostedBarContent for topBar
-                } // end CompositionLocalProvider(LocalBarBlurBitmap for topBar)
+                }
             },
             bottomBar = {
-                CompositionLocalProvider(LocalOneShotBitmap provides LocalBarBlurBitmap.current) {
-                FrostedBarContent {
-                NavigationBar(
-                    containerColor = Color.Transparent,
-                    tonalElevation = 0.dp,
-                    windowInsets = WindowInsets(0.dp),
-                    modifier = Modifier
-                        .frostedBar(hazeState)
-                        .navigationBarsPadding()
-                        .height(58.dp)
-                ) {
-                    val accentColor = LocalAccentColor.current
-                    val navColors = NavigationBarItemDefaults.colors(
-                        indicatorColor = accentColor,
-                        selectedIconColor = MaterialTheme.colorScheme.onPrimary,
-                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    NavigationBarItem(
-                        selected = selectedNavTab == 0 && !isSearching,
-                        onClick = {
-                            shellVm.selectTab(0)
-                            isSearching = false
-                        },
-                        icon = { Icon(Icons.Default.Dashboard, contentDescription = "Dashboard", modifier = Modifier.size(20.dp)) },
-                        label = { Text("Dashboard", fontSize = 9.sp) },
-                        colors = navColors
-                    )
-                    NavigationBarItem(
-                        selected = selectedNavTab == 1 && !isSearching,
-                        onClick = {
-                            shellVm.selectTab(1)
-                            isSearching = false
-                        },
-                        icon = { Icon(Icons.Default.Book, contentDescription = "Books", modifier = Modifier.size(20.dp)) },
-                        label = { Text("Books", fontSize = 9.sp) },
-                        colors = navColors
-                    )
-                    NavigationBarItem(
-                        selected = selectedNavTab == 2 && !isSearching,
-                        onClick = {
-                            shellVm.selectTab(2)
-                            isSearching = false
-                        },
-                        icon = { Icon(Icons.Filled.StickyNote2, contentDescription = "Notes", modifier = Modifier.size(20.dp)) },
-                        label = { Text("Notes", fontSize = 9.sp) },
-                        colors = navColors
-                    )
-                    NavigationBarItem(
-                        selected = selectedNavTab == 3 && !isSearching,
-                        onClick = {
-                            shellVm.selectTab(3)
-                            isSearching = false
-                        },
-                        icon = { Icon(Icons.Default.BarChart, contentDescription = "Statistics", modifier = Modifier.size(20.dp)) },
-                        label = { Text("Stats", fontSize = 9.sp) },
-                        colors = navColors
-                    )
-                }
-                } // end FrostedBarContent for bottomBar
-                } // end CompositionLocalProvider(LocalBarBlurBitmap for bottomBar)
+                ScribeNavBar(
+                    items = listOf(
+                        ScribeNavItem(Icons.Default.Dashboard,   "Dashboard"),
+                        ScribeNavItem(Icons.Default.Book,        "Books"),
+                        ScribeNavItem(Icons.Filled.StickyNote2,  "Notes"),
+                        ScribeNavItem(Icons.Default.BarChart,    "Stats"),
+                    ),
+                    selectedIndex = selectedNavTab,
+                    onTabSelected = { tab ->
+                        shellVm.selectTab(tab)
+                        isSearching = false
+                        fabExpanded = false
+                    }
+                )
             },
             floatingActionButton = {
                 // FAB is always visible — LocalBarBlurBitmap (derived from the Coil

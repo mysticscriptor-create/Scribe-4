@@ -44,6 +44,8 @@ import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
 import com.primaloptima.scribe.ui.components.ScribeSpeedDialFab
 import com.primaloptima.scribe.ui.components.SpeedDialItem
+import com.primaloptima.scribe.ui.components.ScribeTopBar
+import com.primaloptima.scribe.ui.components.ScribeBarAction
 import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.frostedContainerColor
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
@@ -281,95 +283,51 @@ fun BookScreen(
             modifier            = Modifier.then(swipeGestureModifier),
             contentWindowInsets = WindowInsets.systemBars,
             topBar = {
-                TopAppBar(
-                    colors   = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                    modifier = Modifier.frostedBar(hazeState),
-                    title    = {
-                        Column {
-                            val (titleColor, titleModifier) = rememberAdaptiveTextColor(
-                                fallback = MaterialTheme.colorScheme.onSurface
-                            )
-                            val sharedTitleModifier = if (
-                                sharedTransitionScope != null &&
-                                animatedContentScope != null &&
-                                book != null
-                            ) {
-                                with(sharedTransitionScope) {
-                                    titleModifier.sharedBounds(
-                                        sharedContentState      = rememberSharedContentState(key = "book_title_${book!!.id}"),
-                                        animatedVisibilityScope = animatedContentScope
-                                    )
-                                }
-                            } else titleModifier
-                            Text(
-                                book?.title ?: "Book",
-                                fontWeight = FontWeight.Bold,
-                                color      = titleColor,
-                                modifier   = sharedTitleModifier
-                            )
-                            if (selectedFolderPath != "/") {
-                                Text("Folder: $selectedFolderPath", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-                            }
-                        }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Default.Folder, contentDescription = "Folders")
-                        }
-                        IconButton(onClick = { vm.toggleViewMode() }) {
-                            Icon(
+                // DropdownMenu hoisted outside ScribeTopBar so it can anchor correctly.
+                var showSortMenu by remember { mutableStateOf(false) }
+                Box {
+                    ScribeTopBar(
+                        title             = book?.title ?: "Book",
+                        navigationIcon    = Icons.AutoMirrored.Filled.ArrowBack,
+                        onNavigationClick = onBack,
+                        actions = listOf(
+                            ScribeBarAction(Icons.Default.Folder,      "Folders")     { scope.launch { drawerState.open() } },
+                            ScribeBarAction(
                                 if (viewMode == BookViewModel.ViewMode.LIST) Icons.Default.ViewStream else Icons.Default.AccountTree,
-                                contentDescription = "Toggle Mode"
-                            )
-                        }
-                        var showSortMenu by remember { mutableStateOf(false) }
-                        IconButton(onClick = { showSortMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Options")
-                        }
-                        DropdownMenu(
-                            expanded         = showSortMenu,
-                            onDismissRequest = { showSortMenu = false },
-                            containerColor   = LocalSolidSurface.current
-                        ) {
+                                "Toggle Mode"
+                            ) { vm.toggleViewMode() },
+                            ScribeBarAction(Icons.Default.MoreVert, "Options") { showSortMenu = true },
+                        )
+                    )
+                    DropdownMenu(
+                        expanded         = showSortMenu,
+                        onDismissRequest = { showSortMenu = false },
+                        containerColor   = LocalSolidSurface.current
+                    ) {
+                        DropdownMenuItem(text = { Text("Change Book Cover") }, onClick = { showSortMenu = false; coverPickerLauncher.launch("image/*") })
+                        DropdownMenuItem(text = { Text("Edit Genre Tags") },   onClick = { showSortMenu = false; scope.launch { captureForDialog { showTagsDialog = true } } })
+                        HorizontalDivider()
+                        val thisBookId = book?.id
+                        val isOngoing  = thisBookId != null && ongoingBookId == thisBookId
+                        if (isOngoing) {
                             DropdownMenuItem(
-                                text    = { Text("Change Book Cover") },
-                                onClick = { showSortMenu = false; coverPickerLauncher.launch("image/*") }
+                                text        = { Text("Remove from Ongoing Project") },
+                                leadingIcon = { Icon(Icons.Default.BookmarkRemove, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                                onClick     = { showSortMenu = false; dashboardVm.clearOngoingProject() }
                             )
+                        } else {
                             DropdownMenuItem(
-                                text    = { Text("Edit Genre Tags") },
-                                onClick = { showSortMenu = false; scope.launch { captureForDialog { showTagsDialog = true } } }
+                                text        = { Text("Set as Ongoing Project") },
+                                leadingIcon = { Icon(Icons.Default.Bookmark, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                                onClick     = { showSortMenu = false; if (thisBookId != null) dashboardVm.setOngoingProject(thisBookId) }
                             )
-                            HorizontalDivider()
-                            val thisBookId = book?.id
-                            val isOngoing  = thisBookId != null && ongoingBookId == thisBookId
-                            if (isOngoing) {
-                                DropdownMenuItem(
-                                    text         = { Text("Remove from Ongoing Project") },
-                                    leadingIcon  = { Icon(Icons.Default.BookmarkRemove, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                                    onClick      = { showSortMenu = false; dashboardVm.clearOngoingProject() }
-                                )
-                            } else {
-                                DropdownMenuItem(
-                                    text        = { Text("Set as Ongoing Project") },
-                                    leadingIcon = { Icon(Icons.Default.Bookmark, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                                    onClick     = {
-                                        showSortMenu = false
-                                        if (thisBookId != null) dashboardVm.setOngoingProject(thisBookId)
-                                    }
-                                )
-                            }
-                            HorizontalDivider()
-                            DropdownMenuItem(text = { Text("Sort by Date Updated") }, onClick = { vm.setSortMode(BookViewModel.SortMode.DATE_UPDATED); showSortMenu = false })
-                            DropdownMenuItem(text = { Text("Sort by Date Created") }, onClick = { vm.setSortMode(BookViewModel.SortMode.DATE_CREATED); showSortMenu = false })
-                            DropdownMenuItem(text = { Text("Sort by Title (A-Z)") },  onClick = { vm.setSortMode(BookViewModel.SortMode.TITLE_AZ);     showSortMenu = false })
                         }
+                        HorizontalDivider()
+                        DropdownMenuItem(text = { Text("Sort by Date Updated") }, onClick = { vm.setSortMode(BookViewModel.SortMode.DATE_UPDATED); showSortMenu = false })
+                        DropdownMenuItem(text = { Text("Sort by Date Created") }, onClick = { vm.setSortMode(BookViewModel.SortMode.DATE_CREATED); showSortMenu = false })
+                        DropdownMenuItem(text = { Text("Sort by Title (A-Z)") },  onClick = { vm.setSortMode(BookViewModel.SortMode.TITLE_AZ);     showSortMenu = false })
                     }
-                )
+                }
             },
             bottomBar = {
                 // Slide-down hide on scroll, slide-up show on scroll-back
