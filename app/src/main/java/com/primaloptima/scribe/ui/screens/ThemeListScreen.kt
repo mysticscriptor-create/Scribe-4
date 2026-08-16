@@ -38,7 +38,8 @@ import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
-import com.primaloptima.scribe.ui.theme.frostedBar
+import com.primaloptima.scribe.ui.components.ScribeTopBar
+import com.primaloptima.scribe.ui.components.ScribeBarAction
 import com.primaloptima.scribe.ui.components.ScribeSingleFab
 import com.primaloptima.scribe.ui.theme.parseComposeColor
 import com.primaloptima.scribe.ui.theme.FontHelper
@@ -107,39 +108,27 @@ fun ThemeListScreen(
     Scaffold(
         contentWindowInsets = WindowInsets.systemBars,
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent
-                ),
-                modifier = Modifier.frostedBar(hazeState),
-                title = { Text("Themes", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    Box {
-                        IconButton(onClick = { showTopMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Menu")
-                        }
-                        DropdownMenu(
-                            expanded = showTopMenu,
-                            onDismissRequest = { showTopMenu = false },
-                            containerColor = LocalSolidSurface.current
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Import Theme") },
-                                leadingIcon = { Icon(Icons.Default.FileDownload, contentDescription = null) },
-                                onClick = {
-                                    showTopMenu = false
-                                    importThemeLauncher.launch("*/*")
-                                }
-                            )
-                        }
-                    }
+            Box {
+                ScribeTopBar(
+                    title             = "Themes",
+                    navigationIcon    = Icons.AutoMirrored.Filled.ArrowBack,
+                    onNavigationClick = onBack,
+                    actions           = listOf(
+                        ScribeBarAction(Icons.Default.MoreVert, "Menu") { showTopMenu = true }
+                    )
+                )
+                DropdownMenu(
+                    expanded         = showTopMenu,
+                    onDismissRequest = { showTopMenu = false },
+                    containerColor   = LocalSolidSurface.current
+                ) {
+                    DropdownMenuItem(
+                        text        = { Text("Import Theme") },
+                        leadingIcon = { Icon(Icons.Default.FileDownload, contentDescription = null) },
+                        onClick     = { showTopMenu = false; importThemeLauncher.launch("*/*") }
+                    )
                 }
-            )
+            }
         },
         floatingActionButton = {
             ScribeSingleFab(

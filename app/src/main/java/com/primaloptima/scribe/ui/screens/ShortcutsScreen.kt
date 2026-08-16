@@ -27,7 +27,8 @@ import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
-import com.primaloptima.scribe.ui.theme.frostedBar
+import com.primaloptima.scribe.ui.components.ScribeTopBar
+import com.primaloptima.scribe.ui.components.ScribeBarAction
 import com.primaloptima.scribe.ui.components.ScribeSingleFab
 import com.primaloptima.scribe.util.BitmapBlur
 import com.primaloptima.scribe.util.model.ShortcutAction
@@ -72,25 +73,16 @@ fun ShortcutsScreen(
     Scaffold(
         contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.ime),
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent
-                ),
-                modifier = Modifier.frostedBar(hazeState),
-                title = { Text("Shortcuts", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = {
+            ScribeTopBar(
+                title             = "Shortcuts",
+                navigationIcon    = Icons.AutoMirrored.Filled.ArrowBack,
+                onNavigationClick = onBack,
+                actions           = listOf(
+                    ScribeBarAction(Icons.Default.Refresh, "Reset") {
                         vm.resetToDefaults()
                         Toast.makeText(context, "Shortcuts reset to defaults", Toast.LENGTH_SHORT).show()
-                    }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Reset")
                     }
-                }
+                )
             )
         },
         floatingActionButton = {

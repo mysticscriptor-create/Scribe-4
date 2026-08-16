@@ -62,7 +62,8 @@ import com.primaloptima.scribe.ui.theme.FontHelper
 import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
-import com.primaloptima.scribe.ui.theme.frostedBar
+import com.primaloptima.scribe.ui.components.ScribeTopBar
+import com.primaloptima.scribe.ui.components.ScribeBarAction
 import com.primaloptima.scribe.ui.theme.parseComposeColor
 import com.primaloptima.scribe.util.BitmapBlur
 import dev.chrisbanes.haze.hazeSource
@@ -180,68 +181,47 @@ fun ThemeEditScreen(
     Scaffold(
         contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.ime),
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent
-                ),
-                modifier = Modifier.frostedBar(hazeState),
-                title = {
-                    Text(
-                        if (originalTheme.builtIn) "View Theme" else "Edit Theme",
-                        fontWeight = FontWeight.Bold
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(
-                        enabled = !originalTheme.builtIn && !isLuminancePending,
-                        onClick = {
-                        val updated = originalTheme.copy(
-                            name = name,
-                            fontSize = fontSize.toInt(),
-                            lineHeight = lineHeight,
-                            paragraphSpacing = paragraphSpacing.toInt(),
-                            paddingHorizontal = sideMargins.toInt(),
-                            fontFamily = fontFamily,
-                            backgroundImageUri = bgUri,
-                            backgroundImageOriginalUri = bgOriginalUri,
-                            backgroundImageOpacity = bgOpacity,
-                            bgMode = bgMode,
-                            blurIntensity = blurIntensity,
-                            frostedGlassEnabled = frostedGlassEnabled,
-                            frostedTintEnabled = frostedTintEnabled,
-                            frostedBlurRadius = frostedBlurRadius,
-                            textAlignment = textAlignment,
-                            themeScope = themeScope,
-                            emoji = emoji,
-                            savedBgLuminance = bgLuminance,
-                            colors = originalTheme.colors.copy(
-                                background = bgHex,
-                                surface = bgHex,
-                                text = textHex,
-                                accent = accentHex,
-                                toolbar = bgHex,
-                                toolbarText = textHex
+            ScribeTopBar(
+                title             = if (originalTheme.builtIn) "View Theme" else "Edit Theme",
+                navigationIcon    = Icons.AutoMirrored.Filled.ArrowBack,
+                onNavigationClick = onBack,
+                actions           = if (originalTheme.builtIn) emptyList() else listOf(
+                    ScribeBarAction(Icons.Default.Check, "Save") {
+                        if (!isLuminancePending) {
+                            val updated = originalTheme.copy(
+                                name = name,
+                                fontSize = fontSize.toInt(),
+                                lineHeight = lineHeight,
+                                paragraphSpacing = paragraphSpacing.toInt(),
+                                paddingHorizontal = sideMargins.toInt(),
+                                fontFamily = fontFamily,
+                                backgroundImageUri = bgUri,
+                                backgroundImageOriginalUri = bgOriginalUri,
+                                backgroundImageOpacity = bgOpacity,
+                                bgMode = bgMode,
+                                blurIntensity = blurIntensity,
+                                frostedGlassEnabled = frostedGlassEnabled,
+                                frostedTintEnabled = frostedTintEnabled,
+                                frostedBlurRadius = frostedBlurRadius,
+                                textAlignment = textAlignment,
+                                themeScope = themeScope,
+                                emoji = emoji,
+                                savedBgLuminance = bgLuminance,
+                                colors = originalTheme.colors.copy(
+                                    background = bgHex,
+                                    surface = bgHex,
+                                    text = textHex,
+                                    accent = accentHex,
+                                    toolbar = bgHex,
+                                    toolbarText = textHex
+                                )
                             )
-                        )
-                        vm.save(updated)
-                        Toast.makeText(context, "Theme saved", Toast.LENGTH_SHORT).show()
-                        onBack()
-                    }) {
-                        if (isLuminancePending) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(Icons.Default.Check, contentDescription = "Save")
+                            vm.save(updated)
+                            Toast.makeText(context, "Theme saved", Toast.LENGTH_SHORT).show()
+                            onBack()
                         }
                     }
-                }
+                )
             )
         }
     ) { padding ->

@@ -38,7 +38,7 @@ import com.primaloptima.scribe.viewmodel.EditorViewModel
 import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
-import com.primaloptima.scribe.ui.theme.frostedBar
+import com.primaloptima.scribe.ui.components.ScribeTopBar
 import com.primaloptima.scribe.util.BitmapBlur
 import com.primaloptima.scribe.util.MarkdownUtil
 import dev.chrisbanes.haze.hazeSource
@@ -117,17 +117,10 @@ fun HistoryScreen(
     Scaffold(
         contentWindowInsets = WindowInsets.systemBars,
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent
-                ),
-                modifier = Modifier.frostedBar(hazeState),
-                title = { Text("Version History", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                }
+            ScribeTopBar(
+                title             = "Version History",
+                navigationIcon    = Icons.AutoMirrored.Filled.ArrowBack,
+                onNavigationClick = onBack
             )
         }
     ) { padding ->
