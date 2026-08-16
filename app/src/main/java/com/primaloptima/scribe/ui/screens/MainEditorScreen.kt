@@ -72,9 +72,6 @@ import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
@@ -302,114 +299,7 @@ fun MainEditorScreen(
         BackHandler { scope.launch { leftDrawerState.close() } }
     }
 
-    // ── Gesture router ────────────────────────────────────────────────────────
-    // Rules:
-    //  A) If first motion is mostly vertical (ady > adx * 0.7) → bail out
-    //     immediately so Sora/scroll children get every event natively.
-    //  B) Keyboard open OR companion panel open → skip all custom gestures.
-    //  C) Otherwise, edge-zone + clearly horizontal motion → open drawer/pager.
-    val isKeyboardOpenForGesture = WindowInsets.isImeVisible
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .pointerInput(leftDrawerState, rightPagerState, isCompanionOpen, isKeyboardOpenForGesture) {
-                val edgeZonePx      = 20.dp.toPx()
-                val slopPx          = 16.dp.toPx()
-                val tapSlopPx       = 16f
-                val drawerTriggerPx = 72.dp.toPx()
-                val doubleTapTimeout  = viewConfiguration.doubleTapTimeoutMillis
-                val doubleTapMinTime  = viewConfiguration.doubleTapMinTimeMillis
-
-                data class PendingTap(val x: Float, val y: Float, val time: Long)
-                var pendingTap: PendingTap? = null
-
-                awaitPointerEventScope {
-                    while (true) {
-                        val down      = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                        val touchTime = System.currentTimeMillis()
-                        val startX    = down.position.x
-                        val startY    = down.position.y
-
-                        pendingTap?.let { if (touchTime - it.time > doubleTapTimeout) pendingTap = null }
-
-                        // ── Double-tap (only when keyboard is closed) ──────────
-                        if (!isKeyboardOpenForGesture) {
-                            val isSecondTap = pendingTap?.let { first ->
-                                val dt  = touchTime - first.time
-                                val dxt = startX - first.x
-                                val dyt = startY - first.y
-                                dt >= doubleTapMinTime && dt <= doubleTapTimeout &&
-                                        kotlin.math.sqrt(dxt * dxt + dyt * dyt) < tapSlopPx
-                            } ?: false
-
-                            if (isSecondTap) {
-                                pendingTap = null
-                                down.consume()
-                                var becameDrag = false
-                                while (true) {
-                                    val event  = awaitPointerEvent(PointerEventPass.Initial)
-                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                    if (!change.pressed) {
-                                        if (!becameDrag) { change.consume(); editorVm.toggleZen() }
-                                        break
-                                    }
-                                    val cdx = change.position.x - startX
-                                    val cdy = change.position.y - startY
-                                    if (kotlin.math.sqrt(cdx * cdx + cdy * cdy) > tapSlopPx) becameDrag = true
-                                }
-                                continue
-                            }
-                        }
-
-                        pendingTap = PendingTap(startX, startY, touchTime)
-
-                        // ── Locks: keyboard open or companion open → pass through ─
-                        if (isKeyboardOpenForGesture || isCompanionOpen) continue
-
-                        val isLeftEdge  = startX < edgeZonePx
-                        val isRightEdge = startX > size.width - edgeZonePx
-                        if (!isLeftEdge && !isRightEdge) continue
-
-                        var hasExitedSlop = false
-                        var drawerFired   = false
-                        var abandonedAsVertical = false
-                        while (true) {
-                            val event  = awaitPointerEvent(PointerEventPass.Initial)
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) break
-                            if (abandonedAsVertical) break
-
-                            val dx   = change.position.x - startX
-                            val dy   = change.position.y - startY
-                            val dist = kotlin.math.sqrt(dx * dx + dy * dy)
-
-                            if (!hasExitedSlop && dist > slopPx) {
-                                hasExitedSlop = true
-                                val adx = if (dx < 0f) -dx else dx
-                                val ady = if (dy < 0f) -dy else dy
-                                // Any vertical lean → abandon and let scroll handle it
-                                if (ady > adx * 0.7f) { abandonedAsVertical = true; break }
-                                if (adx <= ady * 1.3f) break
-                            }
-
-                            if (hasExitedSlop && !abandonedAsVertical) {
-                                val towardCenter = (isLeftEdge && dx > 0f) || (isRightEdge && dx < 0f)
-                                if (!towardCenter) break
-                                val absDx = if (dx < 0f) -dx else dx
-                                change.consume()
-                                if (!drawerFired && absDx > drawerTriggerPx) {
-                                    drawerFired = true
-                                    scope.launch {
-                                        if (isLeftEdge) leftDrawerState.open()
-                                        else rightPagerState.animateScrollToPage(1)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
         // ── Editor-only background image ──────────────────────────────────────
         if (isEditorOnlyBg) {
             AsyncImage(
@@ -438,9 +328,8 @@ fun MainEditorScreen(
 
         // ── Left vault drawer ─────────────────────────────────────────────────
         ModalNavigationDrawer(
-            drawerState    = leftDrawerState,
-            gesturesEnabled = !isKeyboardOpenForGesture,
-            drawerContent  = {
+            drawerState   = leftDrawerState,
+            drawerContent = {
                 CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap) {
                     ModalDrawerSheet(
                         drawerContainerColor = Color.Transparent,
@@ -611,9 +500,8 @@ fun MainEditorScreen(
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
 
                 HorizontalPager(
-                    state                = rightPagerState,
-                    modifier             = Modifier.fillMaxSize(),
-                    userScrollEnabled    = !isKeyboardOpenForGesture,
+                    state                   = rightPagerState,
+                    modifier                = Modifier.fillMaxSize(),
                     beyondViewportPageCount = 1,
                 ) { page ->
                     when (page) {
@@ -662,6 +550,8 @@ fun MainEditorScreen(
                                             onDismissRequest = { showMenu = false },
                                             containerColor   = LocalSolidSurface.current
                                         ) {
+                                            DropdownMenuItem(text = { Text("Enter Zen Mode") }, onClick = { showMenu = false; editorVm.setZen(true) })
+                                            HorizontalDivider()
                                             DropdownMenuItem(text = { Text("Open as Floating Reference Window") }, onClick = { showMenu = false; activeNote?.let { editorVm.openFloatingWindow(it.id) } })
                                             HorizontalDivider()
                                             DropdownMenuItem(text = { Text("Export as TXT") },      onClick = { showMenu = false; activeNote?.let { ExportHelper.shareNote(context, it, "txt") } })
