@@ -1083,44 +1083,44 @@ private fun RightCompanionPanel(
         containerColor      = Color.Transparent,
         contentWindowInsets = WindowInsets.systemBars,
         topBar = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .frostedBar(hazeState)
-            ) {
-                    Row(
-                        modifier          = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = onClose) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = "Back to Editor",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-
-                        Text(
-                            text       = if (rightPanelTab == 0) "Pinned Notes" else "Outline",
-                            fontWeight = FontWeight.Bold,
-                            fontSize   = 17.sp,
-                            color      = MaterialTheme.colorScheme.onSurface,
-                            modifier   = Modifier.weight(1f)
+            TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor             = Color.Transparent,
+                    titleContentColor          = MaterialTheme.colorScheme.onSurface,
+                    navigationIconContentColor = MaterialTheme.colorScheme.primary,
+                    actionIconContentColor     = MaterialTheme.colorScheme.primary,
+                ),
+                modifier = Modifier.frostedBar(hazeState),
+                navigationIcon = {
+                    IconButton(onClick = onClose) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "Back to Editor"
                         )
-
-                        Surface(
-                            shape    = RoundedCornerShape(50),
-                            color    = MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.padding(end = 8.dp, top = 4.dp, bottom = 4.dp)
-                        ) {
-                            Row(modifier = Modifier.padding(3.dp)) {
-                                PillTab(label = "Pinned",  selected = rightPanelTab == 0, onClick = { onTabChange(0) })
-                                PillTab(label = "Outline", selected = rightPanelTab == 1, onClick = { onTabChange(1) })
-                            }
+                    }
+                },
+                title = {
+                    Text(
+                        text       = if (rightPanelTab == 0) "Pinned Notes" else "Outline",
+                        fontWeight = FontWeight.Bold,
+                        fontSize   = 17.sp,
+                        maxLines   = 1,
+                        overflow   = TextOverflow.Ellipsis,
+                    )
+                },
+                actions = {
+                    Surface(
+                        shape    = RoundedCornerShape(50),
+                        color    = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.padding(end = 8.dp, top = 4.dp, bottom = 4.dp)
+                    ) {
+                        Row(modifier = Modifier.padding(3.dp)) {
+                            PillTab(label = "Pinned",  selected = rightPanelTab == 0, onClick = { onTabChange(0) })
+                            PillTab(label = "Outline", selected = rightPanelTab == 1, onClick = { onTabChange(1) })
                         }
                     }
-                    HorizontalDivider()
                 }
+            )
         }
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
