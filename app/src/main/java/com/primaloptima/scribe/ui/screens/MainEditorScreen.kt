@@ -1524,17 +1524,22 @@ private fun FormatButton(label: String, onClick: () -> Unit) {
 // ── CodeEditor extension helpers ──────────────────────────────────────────────
 
 private fun CodeEditor.applyFormat(open: String, close: String) {
-    val cursor = this.cursor
-    if (cursor.isSelected) {
-        val selected = this.text.subContent(
-            cursor.leftLine, cursor.leftColumn,
-            cursor.rightLine, cursor.rightColumn
-        ).toString()
-        this.insertText("$open$selected$close", 0)
+    val cur = cursor
+    if (cur.isSelected) {
+        val indexer  = text.indexer
+        val startIdx = indexer.getCharIndex(cur.leftLine,  cur.leftColumn)
+        val endIdx   = indexer.getCharIndex(cur.rightLine, cur.rightColumn)
+        val selected = text.subSequence(startIdx, endIdx).toString()
+        text.replace(
+            cur.leftLine,  cur.leftColumn,
+            cur.rightLine, cur.rightColumn,
+            "$open$selected$close"
+        )
     } else {
-        this.insertText("$open$close", 0)
-        val newCol = cursor.leftColumn - close.length
-        if (newCol >= 0) this.setSelection(cursor.leftLine, newCol)
+        val line = cur.leftLine
+        val col  = cur.leftColumn
+        text.insert(line, col, "$open$close")
+        this.cursor.set(line, col + open.length)
     }
 }
 
