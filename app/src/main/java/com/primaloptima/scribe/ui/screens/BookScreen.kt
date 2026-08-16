@@ -79,13 +79,23 @@ import com.primaloptima.scribe.ui.components.ScribeCard
 import com.primaloptima.scribe.ui.components.ScribeCardTokens
 import com.primaloptima.scribe.ui.components.ScribeContentCard
 import com.primaloptima.scribe.ui.components.ScribeProgressBar
-import com.primaloptima.scribe.ui.components.ScribeStripCard
 import com.primaloptima.scribe.ui.theme.LocalAccentColor
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.unit.Velocity
 import kotlin.math.abs
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.unit.Dp
+import androidx.core.graphics.drawable.toBitmap
+import coil3.ImageLoader
+import coil3.request.SuccessResult
+import coil3.request.allowHardware
+import kotlinx.coroutines.withContext
 
 // ── Scroll-hide connection ────────────────────────────────────────────────────
 // Tracks scroll direction so bottom bar + FAB can hide/show smoothly.
@@ -290,6 +300,28 @@ fun BookScreen(
                         title             = book?.title ?: "Book",
                         navigationIcon    = Icons.AutoMirrored.Filled.ArrowBack,
                         onNavigationClick = onBack,
+                        titleContent      = { titleModifier ->
+                            val (titleColor, adaptiveModifier) = rememberAdaptiveTextColor(
+                                fallback = MaterialTheme.colorScheme.onSurface
+                            )
+                            val sharedMod = if (sharedTransitionScope != null && animatedContentScope != null && book != null) {
+                                with(sharedTransitionScope) {
+                                    adaptiveModifier.then(titleModifier).sharedBounds(
+                                        sharedContentState      = rememberSharedContentState(key = "book_title_${book!!.id}"),
+                                        animatedVisibilityScope = animatedContentScope
+                                    )
+                                }
+                            } else adaptiveModifier.then(titleModifier)
+                            Text(
+                                text       = book?.title ?: "Book",
+                                fontWeight = FontWeight.Bold,
+                                fontSize   = 17.sp,
+                                maxLines   = 1,
+                                overflow   = TextOverflow.Ellipsis,
+                                color      = titleColor,
+                                modifier   = sharedMod
+                            )
+                        },
                         actions = listOf(
                             ScribeBarAction(Icons.Default.Folder,      "Folders")     { scope.launch { drawerState.open() } },
                             ScribeBarAction(
@@ -390,126 +422,61 @@ fun BookScreen(
                     }
 
                     if (viewMode == BookViewModel.ViewMode.LIST) {
-                        val pagerState = rememberPagerState(pageCount = { allFolderPaths.size })
+                        val pagerState    = rememberPagerState(pageCount = { allFolderPaths.size })
+                        val listState     = rememberLazyListState()
+
+                        // ── Collapse progress (0f=expanded, 1f=fully collapsed) ──────────
+                        // Driven by scroll offset of the header item.
+                        val headerHeightPx = remember { mutableFloatStateOf(0f) }
+                        val collapseProgress by remember {
+                            derivedStateOf {
+                                if (headerHeightPx.floatValue == 0f) 0f
+                                else {
+                                    val offset = listState.firstVisibleItemScrollOffset.toFloat()
+                                    val item   = listState.firstVisibleItemIndex
+                                    // Only collapse while header (item 0) is visible
+                                    if (item > 0) 1f
+                                    else (offset / headerHeightPx.floatValue).coerceIn(0f, 1f)
+                                }
+                            }
+                        }
+                        // Fade starts at 60%, finishes at 95%
+                        val headerAlpha by remember {
+                            derivedStateOf { ((1f - collapseProgress) / 0.4f).coerceIn(0f, 1f) }
+                        }
+
                         LaunchedEffect(pagerState.currentPage) {
                             selectedFolderPath = allFolderPaths[pagerState.currentPage]
                         }
 
-                        // Outer LazyColumn: header item + tab row + pager-page list
-                        // We use a single LazyColumn so the header scrolls away naturally.
-                        val outerListState = rememberLazyListState()
+                        // ── New structure: Column { CollapsibleHeader + StickyTabRow + LazyColumn }
+                        Column(modifier = Modifier.fillMaxSize()) {
 
-                        LazyColumn(
-                            state           = outerListState,
-                            modifier        = Modifier.fillMaxSize()
-                        ) {
-                            // ── BOOK INFO HEADER ──────────────────────────────
-                            item(key = "book_header") {
-                                book?.let { b ->
-                                    BookInfoHeader(
-                                        book          = b,
-                                        notes         = notes,
-                                        folders       = folders,
-                                        onSummaryClick = {
-                                            scope.launch { captureForDialog { showSummaryDialog = true } }
-                                        }
-                                    )
-                                }
-                            }
-
-                            // ── FOLDER TAB ROW ────────────────────────────────
-                            item(key = "tab_row") {
-                                PrimaryScrollableTabRow(
-                                    selectedTabIndex = pagerState.currentPage,
-                                    edgePadding      = 16.dp
-                                ) {
-                                    allFolderPaths.forEachIndexed { index, path ->
-                                        val label = if (path == "/") "Main" else path.removePrefix("/")
-                                        Tab(
-                                            selected = pagerState.currentPage == index,
-                                            onClick  = { scope.launch { pagerState.animateScrollToPage(index) } },
-                                            text     = { Text(label, fontWeight = FontWeight.Bold) }
-                                        )
+                            // ── Collapsible header — clips height as user scrolls ──────────
+                            // Height goes from full → 0 as collapseProgress 0→1.
+                            // Alpha fades from 1→0 in the last 40% of collapse.
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .graphicsLayer {
+                                        alpha = headerAlpha
+                                        // clip content that would overflow during collapse
+                                        clip = true
                                     }
-                                }
-                            }
-
-                            // ── NOTE LIST for current pager page ──────────────
-                            // We embed HorizontalPager inside a fixed-height item so
-                            // the tabs stay sticky-ish after the header scrolls away.
-                            item(key = "pager_content") {
-                                HorizontalPager(
-                                    state    = pagerState,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(min = 400.dp)
-                                ) { page ->
-                                    val currentPath = allFolderPaths[page]
-                                    val pageNotes   = notes.filter { it.folderPath == currentPath }
-
-                                    if (pageNotes.isEmpty()) {
-                                        Box(
-                                            modifier         = Modifier
-                                                .fillMaxWidth()
-                                                .height(300.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                                Icon(
-                                                    Icons.Outlined.Description,
-                                                    contentDescription = null,
-                                                    modifier           = Modifier.size(64.dp),
-                                                    tint               = MaterialTheme.colorScheme.outline
-                                                )
-                                                Spacer(modifier = Modifier.height(16.dp))
-                                                val displayPathName = if (currentPath == "/") "Main" else currentPath
-                                                Text(
-                                                    "No notes in $displayPathName",
-                                                    fontSize = 16.sp,
-                                                    color    = MaterialTheme.colorScheme.outline
-                                                )
-                                            }
-                                        }
-                                    } else {
-                                        // Non-scrollable Column inside the pager page — outer
-                                        // LazyColumn handles all scrolling.
-                                        Column(
-                                            modifier            = Modifier.fillMaxWidth(),
-                                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            Spacer(modifier = Modifier.height(4.dp))
-                                            pageNotes.forEach { note ->
-                                                NoteListRow(
-                                                    note        = note,
-                                                    modifier    = Modifier.padding(horizontal = 12.dp),
-                                                    onClick     = { onOpenNote(note.id) },
-                                                    onOpenFloat = { onOpenNote(note.id) },
-                                                    onRename    = { scope.launch { captureForDialog { noteToRename = note } } },
-                                                    onDuplicate = { vm.duplicateNote(note.id) },
-                                                    onDelete    = { scope.launch { captureForDialog { noteToDelete = note } } }
-                                                )
-                                            }
-                                            Spacer(modifier = Modifier.height(80.dp)) // bottom bar clearance
+                                    .onGloballyPositioned { coords ->
+                                        // Capture natural height once, before any collapse
+                                        if (headerHeightPx.floatValue == 0f)
+                                            headerHeightPx.floatValue = coords.size.height.toFloat()
+                                    }
+                                    // Animate the height from full → 0
+                                    .layout { measurable, constraints ->
+                                        val placeable = measurable.measure(constraints)
+                                        val height = (placeable.height * (1f - collapseProgress)).toInt().coerceAtLeast(0)
+                                        layout(placeable.width, height) {
+                                            placeable.placeRelative(0, 0)
                                         }
                                     }
-                                }
-                            }
-                        }
-
-                    } else {
-                        // TREE MODE — header + tree in one LazyColumn
-                        val treeListState = rememberLazyListState()
-                        // Compute outside LazyColumn so remember() is in a @Composable context.
-                        val rootNotes = remember(notes) { notes.filter { it.folderPath == "/" } }
-                        val folderPaths = remember(folders) {
-                            folders.map { it.path }.filter { it != "/" }.sorted()
-                        }
-                        LazyColumn(
-                            state           = treeListState,
-                            contentPadding  = PaddingValues(bottom = 80.dp),
-                            modifier        = Modifier.fillMaxSize()
-                        ) {
-                            item(key = "book_header_tree") {
+                            ) {
                                 book?.let { b ->
                                     BookInfoHeader(
                                         book           = b,
@@ -521,25 +488,182 @@ fun BookScreen(
                                     )
                                 }
                             }
-                            // Tree items inline
-                            if (rootNotes.isNotEmpty()) {
-                                items(rootNotes, key = { "root_${it.id}" }) { note ->
-                                    NoteListRow(
-                                        note        = note,
-                                        modifier    = Modifier.padding(horizontal = 12.dp),
-                                        onClick     = { onOpenNote(note.id) },
-                                        onOpenFloat = { onOpenNote(note.id) },
-                                        onRename    = { scope.launch { captureForDialog { noteToRename = note } } },
-                                        onDuplicate = { vm.duplicateNote(note.id) },
-                                        onDelete    = { scope.launch { captureForDialog { noteToDelete = note } } }
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
+
+                            // ── Sticky tab row — always pinned below ScribeTopBar ──────────
+                            Surface(
+                                color     = MaterialTheme.colorScheme.surface,
+                                tonalElevation = 2.dp,
+                                modifier  = Modifier.fillMaxWidth()
+                            ) {
+                                ScrollableTabRow(
+                                    selectedTabIndex = pagerState.currentPage,
+                                    edgePadding      = 12.dp,
+                                    containerColor   = Color.Transparent,
+                                    indicator        = { tabPositions ->
+                                        // Pill indicator behind selected tab
+                                        val accentColor = LocalAccentColor.current
+                                        if (pagerState.currentPage < tabPositions.size) {
+                                            val pos = tabPositions[pagerState.currentPage]
+                                            Box(
+                                                Modifier
+                                                    .fillMaxSize()
+                                                    .wrapContentSize(Alignment.BottomStart)
+                                                    .offset(x = pos.left - 4.dp)
+                                                    .width(pos.width + 8.dp)
+                                                    .height(3.dp)
+                                                    .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                                                    .background(accentColor)
+                                            )
+                                        }
+                                    },
+                                    divider = {}
+                                ) {
+                                    allFolderPaths.forEachIndexed { index, path ->
+                                        val label    = if (path == "/") "Main" else path.removePrefix("/")
+                                        val selected = pagerState.currentPage == index
+                                        Tab(
+                                            selected = selected,
+                                            onClick  = { scope.launch { pagerState.animateScrollToPage(index) } },
+                                            text     = {
+                                                Text(
+                                                    label,
+                                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                                    fontSize   = 13.sp
+                                                )
+                                            }
+                                        )
+                                    }
                                 }
                             }
-                            folderPaths.forEach { fPath ->
-                                item(key = "folder_header_$fPath") {
-                                    TreeFolderHeader(fPath = fPath, notes = notes) { note ->
-                                        onOpenNote(note.id)
+
+                            // ── Note list — this is the only scrollable part ───────────────
+                            HorizontalPager(
+                                state    = pagerState,
+                                modifier = Modifier.fillMaxSize()
+                            ) { page ->
+                                val currentPath = allFolderPaths[page]
+                                val pageNotes   = notes.filter { it.folderPath == currentPath }
+
+                                if (pageNotes.isEmpty()) {
+                                    Box(
+                                        modifier         = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Icon(
+                                                Icons.Outlined.Description,
+                                                contentDescription = null,
+                                                modifier           = Modifier.size(56.dp),
+                                                tint               = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                                            )
+                                            Spacer(modifier = Modifier.height(12.dp))
+                                            Text(
+                                                "No notes in ${if (currentPath == "/") "Main" else currentPath}",
+                                                fontSize = 15.sp,
+                                                color    = MaterialTheme.colorScheme.outline
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    LazyColumn(
+                                        state          = listState,
+                                        contentPadding = PaddingValues(
+                                            start  = 12.dp,
+                                            end    = 12.dp,
+                                            top    = 8.dp,
+                                            bottom = 88.dp
+                                        ),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier            = Modifier.fillMaxSize()
+                                    ) {
+                                        items(pageNotes, key = { it.id }) { note ->
+                                            NoteListRow(
+                                                note        = note,
+                                                onClick     = { onOpenNote(note.id) },
+                                                onOpenFloat = { onOpenNote(note.id) },
+                                                onRename    = { scope.launch { captureForDialog { noteToRename = note } } },
+                                                onDuplicate = { vm.duplicateNote(note.id) },
+                                                onDelete    = { scope.launch { captureForDialog { noteToDelete = note } } }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                    } else {
+                        // TREE MODE — collapsing header + tree list
+                        val treeListState = rememberLazyListState()
+                        val rootNotes   = remember(notes)   { notes.filter { it.folderPath == "/" } }
+                        val folderPaths = remember(folders) { folders.map { it.path }.filter { it != "/" }.sorted() }
+
+                        val treeHeaderHeightPx = remember { mutableFloatStateOf(0f) }
+                        val treeCollapseProgress by remember {
+                            derivedStateOf {
+                                if (treeHeaderHeightPx.floatValue == 0f) 0f
+                                else {
+                                    val offset = treeListState.firstVisibleItemScrollOffset.toFloat()
+                                    val item   = treeListState.firstVisibleItemIndex
+                                    if (item > 0) 1f
+                                    else (offset / treeHeaderHeightPx.floatValue).coerceIn(0f, 1f)
+                                }
+                            }
+                        }
+                        val treeHeaderAlpha by remember {
+                            derivedStateOf { ((1f - treeCollapseProgress) / 0.4f).coerceIn(0f, 1f) }
+                        }
+
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .graphicsLayer { alpha = treeHeaderAlpha; clip = true }
+                                    .onGloballyPositioned { coords ->
+                                        if (treeHeaderHeightPx.floatValue == 0f)
+                                            treeHeaderHeightPx.floatValue = coords.size.height.toFloat()
+                                    }
+                                    .layout { measurable, constraints ->
+                                        val placeable = measurable.measure(constraints)
+                                        val height = (placeable.height * (1f - treeCollapseProgress)).toInt().coerceAtLeast(0)
+                                        layout(placeable.width, height) { placeable.placeRelative(0, 0) }
+                                    }
+                            ) {
+                                book?.let { b ->
+                                    BookInfoHeader(
+                                        book           = b,
+                                        notes          = notes,
+                                        folders        = folders,
+                                        onSummaryClick = {
+                                            scope.launch { captureForDialog { showSummaryDialog = true } }
+                                        }
+                                    )
+                                }
+                            }
+
+                            LazyColumn(
+                                state          = treeListState,
+                                contentPadding = PaddingValues(bottom = 88.dp),
+                                modifier       = Modifier.fillMaxSize()
+                            ) {
+                                if (rootNotes.isNotEmpty()) {
+                                    items(rootNotes, key = { "root_${it.id}" }) { note ->
+                                        NoteListRow(
+                                            note        = note,
+                                            modifier    = Modifier.padding(horizontal = 12.dp),
+                                            onClick     = { onOpenNote(note.id) },
+                                            onOpenFloat = { onOpenNote(note.id) },
+                                            onRename    = { scope.launch { captureForDialog { noteToRename = note } } },
+                                            onDuplicate = { vm.duplicateNote(note.id) },
+                                            onDelete    = { scope.launch { captureForDialog { noteToDelete = note } } }
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                    }
+                                }
+                                folderPaths.forEach { fPath ->
+                                    item(key = "folder_header_$fPath") {
+                                        TreeFolderHeader(fPath = fPath, notes = notes) { note ->
+                                            onOpenNote(note.id)
+                                        }
                                     }
                                 }
                             }
@@ -737,234 +861,237 @@ private fun BookInfoHeader(
     val accentColor = LocalAccentColor.current
     val onSurface   = MaterialTheme.colorScheme.onSurface
     val outline     = MaterialTheme.colorScheme.outline
+    val surface     = MaterialTheme.colorScheme.surface
 
     val sharedTransitionScope = LocalSharedTransitionScope.current
     val animatedContentScope  = if (LocalInspectionMode.current) null
                                 else LocalNavAnimatedContentScope.current
 
-    val totalWords   = remember(notes) { notes.sumOf { it.wordCount } }
-    val fileCount    = notes.size
-    val folderCount  = folders.size
+    val totalWords  = remember(notes) { notes.sumOf { it.wordCount } }
+    val fileCount   = notes.size
+    val folderCount = folders.size
 
-    // Parse tags from comma-separated string
     val tagList = remember(book.tags) {
         book.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
     }
 
-    Column(
+    // ── Ambient cover color extraction ────────────────────────────────────
+    // Load cover bitmap on IO, extract a dominant edge color, blend to surface.
+    var ambientColor by remember(book.coverUri) { mutableStateOf<Color?>(null) }
+    LaunchedEffect(book.coverUri) {
+        if (book.coverUri.isNullOrBlank()) { ambientColor = null; return@LaunchedEffect }
+        withContext(Dispatchers.IO) {
+            try {
+                val loader  = ImageLoader(context)
+                val request = ImageRequest.Builder(context)
+                    .data(book.coverUri)
+                    .allowHardware(false)
+                    .size(64, 64) // tiny — we only need color info
+                    .build()
+                val result = loader.execute(request)
+                if (result is SuccessResult) {
+                    val bmp    = result.image.toBitmap()
+                    // Sample a grid of pixels and average them for a dominant tone
+                    var r = 0L; var g = 0L; var b = 0L; var count = 0
+                    val step = maxOf(1, bmp.width / 8)
+                    for (x in 0 until bmp.width step step) {
+                        for (y in 0 until bmp.height step step) {
+                            val px = bmp.getPixel(x, y)
+                            r += android.graphics.Color.red(px)
+                            g += android.graphics.Color.green(px)
+                            b += android.graphics.Color.blue(px)
+                            count++
+                        }
+                    }
+                    if (count > 0) {
+                        ambientColor = Color(
+                            red   = (r / count / 255f),
+                            green = (g / count / 255f),
+                            blue  = (b / count / 255f),
+                            alpha = 1f
+                        )
+                    }
+                }
+            } catch (_: Exception) { ambientColor = null }
+        }
+    }
+
+    // Build ambient gradient: dominant color (muted) → surface
+    val ambientBrush = remember(ambientColor, surface) {
+        val top = ambientColor?.copy(alpha = 0.28f) ?: Color.Transparent
+        Brush.verticalGradient(colors = listOf(top, surface))
+    }
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-    ) {
-        // ── Cover + title/tags/stats row ──────────────────────────────────
-        Row(
-            modifier             = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment    = Alignment.Top
-        ) {
-            // Cover image
-            Box(
-                modifier = Modifier
-                    .width(90.dp)
-                    .height(130.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(accentColor.copy(alpha = 0.12f))
-            ) {
-                if (!book.coverUri.isNullOrBlank()) {
-                    val coverModifier = if (sharedTransitionScope != null && animatedContentScope != null) {
-                        with(sharedTransitionScope) {
-                            Modifier.fillMaxSize().sharedElement(
-                                sharedContentState      = rememberSharedContentState(key = "book_cover_${book.id}"),
-                                animatedVisibilityScope = animatedContentScope
-                            )
-                        }
-                    } else Modifier.fillMaxSize()
-                    AsyncImage(
-                        model             = ImageRequest.Builder(context)
-                            .data(book.coverUri)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = "Book cover",
-                        contentScale      = ContentScale.Crop,
-                        modifier          = coverModifier
-                    )
-                } else {
-                    // Placeholder
-                    Box(
-                        modifier         = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector        = Icons.Outlined.AutoStories,
-                            contentDescription = null,
-                            modifier           = Modifier.size(36.dp),
-                            tint               = accentColor.copy(alpha = 0.5f)
-                        )
-                    }
-                }
+            .drawBehind {
+                // Fill entire header area with ambient gradient
+                drawRect(brush = ambientBrush)
             }
-
-            // Right column: title, tags, stats
-            Column(
-                modifier            = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+        ) {
+            // ── Cover + title/tags/stats ──────────────────────────────────
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment     = Alignment.Top
             ) {
-                // Title
-                Text(
-                    text       = book.title,
-                    fontSize   = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color      = onSurface,
-                    maxLines   = 2,
-                    overflow   = TextOverflow.Ellipsis
-                )
-
-                // Tags — auto-scrolling row
-                if (tagList.isNotEmpty()) {
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier              = Modifier.fillMaxWidth()
-                    ) {
-                        items(tagList) { tag ->
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .background(accentColor.copy(alpha = 0.14f))
-                                    .padding(horizontal = 10.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    text     = tag,
-                                    fontSize = 11.sp,
-                                    color    = accentColor,
-                                    fontWeight = FontWeight.Medium
+                // Cover — shared element transition preserved
+                Box(
+                    modifier = Modifier
+                        .width(90.dp)
+                        .height(130.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(accentColor.copy(alpha = 0.12f))
+                ) {
+                    if (!book.coverUri.isNullOrBlank()) {
+                        val coverModifier = if (sharedTransitionScope != null && animatedContentScope != null) {
+                            with(sharedTransitionScope) {
+                                Modifier.fillMaxSize().sharedElement(
+                                    sharedContentState      = rememberSharedContentState(key = "book_cover_${book.id}"),
+                                    animatedVisibilityScope = animatedContentScope
                                 )
                             }
+                        } else Modifier.fillMaxSize()
+                        AsyncImage(
+                            model              = ImageRequest.Builder(context).data(book.coverUri).crossfade(true).build(),
+                            contentDescription = "Book cover",
+                            contentScale       = ContentScale.Crop,
+                            modifier           = coverModifier
+                        )
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector        = Icons.Outlined.AutoStories,
+                                contentDescription = null,
+                                modifier           = Modifier.size(36.dp),
+                                tint               = accentColor.copy(alpha = 0.5f)
+                            )
                         }
                     }
-                } else {
-                    // Placeholder tap to add tags
-                    Text(
-                        text     = "Tap ··· to add genre tags",
-                        fontSize = 12.sp,
-                        color    = outline.copy(alpha = 0.6f),
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
-                    )
                 }
 
-                // Stats row: words · files · folders
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    verticalAlignment     = Alignment.CenterVertically
+                // Right column
+                Column(
+                    modifier            = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Word count
-                    Row(
-                        verticalAlignment     = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector        = Icons.Outlined.TextFields,
-                            contentDescription = null,
-                            modifier           = Modifier.size(14.dp),
-                            tint               = accentColor
-                        )
+                    Text(
+                        text       = book.title,
+                        fontSize   = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color      = onSurface,
+                        maxLines   = 2,
+                        overflow   = TextOverflow.Ellipsis
+                    )
+
+                    // Tags
+                    if (tagList.isNotEmpty()) {
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier              = Modifier.fillMaxWidth()
+                        ) {
+                            items(tagList) { tag ->
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(accentColor.copy(alpha = 0.14f))
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text(tag, fontSize = 11.sp, color = accentColor, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
+                    } else {
                         Text(
-                            text       = formatWordCount(totalWords),
-                            fontSize   = 13.sp,
-                            color      = onSurface,
-                            fontWeight = FontWeight.SemiBold
+                            text      = "Tap ··· to add genre tags",
+                            fontSize  = 12.sp,
+                            color     = outline.copy(alpha = 0.6f),
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
                         )
                     }
-                    // File count
+
+                    // Stats row
                     Row(
-                        verticalAlignment     = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalAlignment     = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector        = Icons.Outlined.Description,
-                            contentDescription = null,
-                            modifier           = Modifier.size(14.dp),
-                            tint               = outline
-                        )
-                        Text(
-                            text     = "$fileCount",
-                            fontSize = 13.sp,
-                            color    = outline
-                        )
-                    }
-                    // Folder count
-                    Row(
-                        verticalAlignment     = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector        = Icons.Outlined.Folder,
-                            contentDescription = null,
-                            modifier           = Modifier.size(14.dp),
-                            tint               = outline
-                        )
-                        Text(
-                            text     = "$folderCount",
-                            fontSize = 13.sp,
-                            color    = outline
-                        )
+                        StatChip(Icons.Outlined.TextFields, formatWordCount(totalWords), accentColor)
+                        StatChip(Icons.Outlined.Description, "$fileCount", outline)
+                        StatChip(Icons.Outlined.Folder, "$folderCount", outline)
                     }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-        // ── Summary preview ───────────────────────────────────────────────
-        ScribeCard(
-            modifier  = Modifier.fillMaxWidth(),
-            onClick   = onSummaryClick,
-            cornerRadius = ScribeCardTokens.RadiusMedium
-        ) {
-            Column(
+            // ── Tonal surface separator ───────────────────────────────────
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .height(1.dp)
+                    .background(onSurface.copy(alpha = 0.06f))
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ── Summary — tonal surface, no card border ───────────────────
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(onSurface.copy(alpha = 0.05f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication        = null
+                    ) { onSummaryClick() }
                     .padding(horizontal = 14.dp, vertical = 12.dp)
             ) {
-                Row(
-                    modifier              = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment     = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text       = "Summary",
-                        fontSize   = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color      = accentColor
-                    )
-                    Icon(
-                        imageVector        = Icons.Default.Edit,
-                        contentDescription = "Edit summary",
-                        modifier           = Modifier.size(14.dp),
-                        tint               = outline
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
-                if (book.summary.isBlank()) {
-                    Text(
-                        text      = "Tap to add a summary for this book…",
-                        fontSize  = 13.sp,
-                        color     = outline.copy(alpha = 0.6f),
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                        maxLines  = 2
-                    )
-                } else {
-                    Text(
-                        text     = book.summary,
-                        fontSize = 13.sp,
-                        color    = onSurface.copy(alpha = 0.85f),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                Column {
+                    Row(
+                        modifier              = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment     = Alignment.CenterVertically
+                    ) {
+                        Text("Summary", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = accentColor)
+                        Icon(Icons.Default.Edit, contentDescription = "Edit", modifier = Modifier.size(13.dp), tint = outline.copy(alpha = 0.7f))
+                    }
+                    Spacer(modifier = Modifier.height(5.dp))
+                    if (book.summary.isBlank()) {
+                        Text(
+                            text      = "Tap to add a summary for this book…",
+                            fontSize  = 13.sp,
+                            color     = outline.copy(alpha = 0.55f),
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                            maxLines  = 2
+                        )
+                    } else {
+                        Text(
+                            text     = book.summary,
+                            fontSize = 13.sp,
+                            color    = onSurface.copy(alpha = 0.85f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+        }
+    }
+}
+
+@Composable
+private fun StatChip(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(13.dp), tint = tint)
+        Text(text = label, fontSize = 12.sp, color = tint, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -1023,31 +1150,15 @@ private fun NoteListRowStateless(
     note:        Note,
     onNoteClick: (Note) -> Unit
 ) {
-    val accentColor = LocalAccentColor.current
-    val onSurface   = MaterialTheme.colorScheme.onSurface
-    val previewText = remember(note.content) {
-        val lines = note.content.lineSequence().filter { it.isNotBlank() }.take(3).toList()
-        if (lines.isEmpty()) null else lines.joinToString("\n")
-    }
-    ScribeStripCard(
-        title           = note.name,
-        modifier        = Modifier.fillMaxWidth().padding(start = 36.dp, end = 12.dp),
-        subtitle        = "${note.wordCount} words · ${note.folderPath}",
-        preview         = previewText ?: "No text content",
-        previewMaxLines = 2,
-        leading = {
-            Box(
-                modifier         = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(ScribeCardTokens.RadiusTiny))
-                    .background(accentColor.copy(alpha = 0.10f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Outlined.Description, contentDescription = null, modifier = Modifier.size(18.dp), tint = accentColor.copy(alpha = 0.85f))
-            }
-        },
-        onClick    = { onNoteClick(note) },
-        wrapInCard = true
+    // Same visual as NoteListRow but without the context-menu actions
+    NoteListRow(
+        note        = note,
+        modifier    = Modifier.padding(start = 24.dp, end = 12.dp),
+        onClick     = { onNoteClick(note) },
+        onOpenFloat = { onNoteClick(note) },
+        onRename    = {},
+        onDuplicate = {},
+        onDelete    = {}
     )
 }
 
@@ -1137,53 +1248,97 @@ private fun NoteListRow(
     var showMenu    by remember { mutableStateOf(false) }
     val accentColor = LocalAccentColor.current
     val onSurface   = MaterialTheme.colorScheme.onSurface
+    val outline     = MaterialTheme.colorScheme.outline
 
-    val wordCount   = note.wordCount
+    val wordLabel   = remember(note.wordCount) { formatWordCount(note.wordCount) }
     val previewText = remember(note.content) {
-        val lines = note.content.lineSequence().filter { it.isNotBlank() }.take(3).toList()
-        if (lines.isEmpty()) null else lines.joinToString("\n")
+        note.content.lineSequence().filter { it.isNotBlank() }.take(2).joinToString(" ").ifBlank { null }
     }
     val createdStr  = remember(note.createdAt) {
-        SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault()).format(Date(note.createdAt))
+        SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(note.createdAt))
     }
     val modifiedStr = remember(note.updatedAt) {
-        SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault()).format(Date(note.updatedAt))
+        SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(note.updatedAt))
     }
 
-    ScribeStripCard(
-        title           = note.name,
-        modifier        = modifier.fillMaxWidth(),
-        subtitle        = "$wordCount words · ${note.folderPath}",
-        preview         = previewText ?: "No text content",
-        previewMaxLines = 3,
-        footerLines     = listOf("Created: $createdStr", "Modified: $modifiedStr"),
-        leading = {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(ScribeCardTokens.RadiusTiny))
-                    .background(accentColor.copy(alpha = 0.10f))
-                    .border(width = 0.8.dp, color = accentColor.copy(alpha = 0.20f), shape = RoundedCornerShape(ScribeCardTokens.RadiusTiny)),
-                contentAlignment = Alignment.Center
+    ScribeCard(
+        modifier     = modifier.fillMaxWidth(),
+        cornerRadius = ScribeCardTokens.RadiusMedium,
+        onClick      = onClick,
+        accentBorder = true,
+        shine        = true
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            // ── Title row + word count pill ───────────────────────────────
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Icon(Icons.Outlined.Description, contentDescription = null, modifier = Modifier.size(18.dp), tint = accentColor.copy(alpha = 0.85f))
-            }
-        },
-        trailing = {
-            Box {
-                IconButton(onClick = { showMenu = true }) {
-                    Icon(Icons.Default.MoreVert, contentDescription = null, tint = onSurface.copy(alpha = 0.60f))
+                Text(
+                    text       = note.name,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize   = 14.sp,
+                    color      = onSurface,
+                    maxLines   = 1,
+                    overflow   = TextOverflow.Ellipsis,
+                    modifier   = Modifier.weight(1f).padding(end = 8.dp)
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Word count pill
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(accentColor.copy(alpha = 0.13f))
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(wordLabel, fontSize = 10.sp, color = accentColor, fontWeight = FontWeight.Medium)
+                    }
+                    // 3-dot menu
+                    Box {
+                        IconButton(onClick = { showMenu = true }, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Default.MoreVert, contentDescription = null, modifier = Modifier.size(16.dp), tint = onSurface.copy(alpha = 0.5f))
+                        }
+                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = LocalSolidSurface.current) {
+                            DropdownMenuItem(text = { Text("Open") },                    onClick = { showMenu = false; onClick() })
+                            DropdownMenuItem(text = { Text("Open in Floating Window") }, onClick = { showMenu = false; onOpenFloat() })
+                            DropdownMenuItem(text = { Text("Rename") },                  onClick = { showMenu = false; onRename() })
+                            DropdownMenuItem(text = { Text("Duplicate") },               onClick = { showMenu = false; onDuplicate() })
+                            DropdownMenuItem(text = { Text("Delete") },                  onClick = { showMenu = false; onDelete() })
+                        }
+                    }
                 }
-                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = LocalSolidSurface.current) {
-                    DropdownMenuItem(text = { Text("Open") },                          onClick = { showMenu = false; onClick() })
-                    DropdownMenuItem(text = { Text("Open in Floating Window") },       onClick = { showMenu = false; onOpenFloat() })
-                    DropdownMenuItem(text = { Text("Rename") },                        onClick = { showMenu = false; onRename() })
-                    DropdownMenuItem(text = { Text("Duplicate") },                     onClick = { showMenu = false; onDuplicate() })
-                    DropdownMenuItem(text = { Text("Delete") },                        onClick = { showMenu = false; onDelete() })
-                }
             }
-        },
-        onClick    = onClick,
-        wrapInCard = true
-    )
+
+            // ── Preview ───────────────────────────────────────────────────
+            if (previewText != null) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text     = previewText,
+                    fontSize = 12.sp,
+                    color    = onSurface.copy(alpha = 0.52f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                )
+            }
+
+            // ── Compact footer: created · modified ────────────────────────
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Outlined.CalendarToday, contentDescription = null, modifier = Modifier.size(11.dp), tint = outline.copy(alpha = 0.6f))
+                Text(createdStr, fontSize = 11.sp, color = outline.copy(alpha = 0.6f))
+                Text("·", fontSize = 11.sp, color = outline.copy(alpha = 0.4f))
+                Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(11.dp), tint = outline.copy(alpha = 0.6f))
+                Text(modifiedStr, fontSize = 11.sp, color = outline.copy(alpha = 0.6f))
+            }
+        }
+    }
 }

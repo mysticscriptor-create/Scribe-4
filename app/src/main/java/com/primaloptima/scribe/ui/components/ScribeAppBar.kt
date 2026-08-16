@@ -349,6 +349,7 @@ fun ScribeTopBar(
     onNavigationClick: () -> Unit = {},
     actions: List<ScribeBarAction> = emptyList(),
     extraContent: (@Composable () -> Unit)? = null,
+    titleContent: (@Composable (titleModifier: Modifier) -> Unit)? = null,
 ) {
     val (titleColor, titleModifier) = rememberAdaptiveTextColor(
         fallback = MaterialTheme.colorScheme.onSurface
@@ -374,20 +375,25 @@ fun ScribeTopBar(
         }
 
         // ── Title ────────────────────────────────────────────────────────────
-        Text(
-            text       = title,
-            fontWeight = FontWeight.Bold,
-            fontSize   = 17.sp,
-            maxLines   = 1,
-            overflow   = TextOverflow.Ellipsis,
-            color      = titleColor,
-            modifier   = titleModifier
-                .weight(1f)
-                .padding(
-                    start = if (navigationIcon != null) ScribeBarTokens.TitleStartPadding else 12.dp,
-                    end   = 4.dp
-                )
-        )
+        val baseTitleModifier = titleModifier
+            .weight(1f)
+            .padding(
+                start = if (navigationIcon != null) ScribeBarTokens.TitleStartPadding else 12.dp,
+                end   = 4.dp
+            )
+        if (titleContent != null) {
+            titleContent(baseTitleModifier)
+        } else {
+            Text(
+                text       = title,
+                fontWeight = FontWeight.Bold,
+                fontSize   = 17.sp,
+                maxLines   = 1,
+                overflow   = TextOverflow.Ellipsis,
+                color      = titleColor,
+                modifier   = baseTitleModifier
+            )
+        }
 
         // ── Action icons ─────────────────────────────────────────────────────
         actions.forEach { action ->
