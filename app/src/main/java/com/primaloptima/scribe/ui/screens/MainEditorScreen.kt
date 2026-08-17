@@ -9,6 +9,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -72,6 +74,7 @@ import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -91,6 +94,7 @@ import com.primaloptima.scribe.viewmodel.NoteListViewModel
 import com.primaloptima.scribe.viewmodel.ShortcutsViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.roundToInt
 // ── Sora Editor imports ───────────────────────────────────────────────────────
 import androidx.compose.ui.viewinterop.AndroidView
@@ -327,8 +331,9 @@ fun MainEditorScreen(
 
         // ── Left vault drawer ─────────────────────────────────────────────────
         ModalNavigationDrawer(
-            drawerState   = leftDrawerState,
-            drawerContent = {
+            drawerState     = leftDrawerState,
+            gesturesEnabled = false, // We handle swipe gestures manually below
+            drawerContent   = {
                 CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap) {
                     ModalDrawerSheet(
                         drawerContainerColor = Color.Transparent,
@@ -498,8 +503,71 @@ fun MainEditorScreen(
 
             HorizontalPager(
                     state                   = rightPagerState,
-                    modifier                = Modifier.fillMaxSize(),
+                    userScrollEnabled       = false, // We drive paging with our own gesture
                     beyondViewportPageCount = 1,
+                    modifier                = Modifier
+                        .fillMaxSize()
+                        // ── Smart swipe handler ───────────────────────────────
+                        // Rules:
+                        //   Swipe left→right  → open left drawer (or close companion if open)
+                        //   Swipe right→left  → open right companion page
+                        //   Scroll up/down    → does NOT trigger either — editor scrolls freely
+                        //
+                        // How it works:
+                        //   We read events in the Initial pass (before any child sees them).
+                        //   We don't consume anything until we know the finger is going
+                        //   more horizontal than vertical (2:1 ratio).
+                        //   If vertical wins, we never consume, so the Sora editor below
+                        //   receives all events and scrolls normally.
+                        .pointerInput(leftDrawerState, rightPagerState, isCompanionOpen) {
+                            val slop     = viewConfiguration.touchSlop
+                            val minSwipe = 50.dp.toPx() // finger must travel at least 50 dp
+                            awaitEachGesture {
+                                // Track the very first finger down.
+                                // requireUnconsumed = false so we still see the event even
+                                // when the Sora editor consumed it first.
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                var totalX     = 0f
+                                var totalY     = 0f
+                                var locked     = false   // direction decided yet?
+                                var isHoriz    = false   // did horizontal win?
+                                while (true) {
+                                    // Initial pass = we see events BEFORE children do.
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    val p = event.changes.find { it.id == down.id } ?: break
+                                    if (!p.pressed) break          // finger lifted
+                                    val delta = p.positionChange()
+                                    totalX += delta.x
+                                    totalY += delta.y
+                                    // Wait until the finger moved past the touch-slop threshold
+                                    // before committing to a direction.
+                                    if (!locked) {
+                                        val ax = abs(totalX)
+                                        val ay = abs(totalY)
+                                        if (ax > slop || ay > slop) {
+                                            locked  = true
+                                            // Require 2× horizontal dominance so that
+                                            // even a slightly diagonal vertical scroll
+                                            // is treated as vertical and passes through.
+                                            isHoriz = ax >= ay * 2f
+                                        }
+                                    }
+                                    // Only consume once we know it's a horizontal swipe.
+                                    // Vertical swipes are never consumed here, so the
+                                    // Sora editor's AndroidView gets them normally.
+                                    if (locked && isHoriz) p.consume()
+                                }
+                                // Gesture ended — decide what to trigger.
+                                if (locked && isHoriz) when {
+                                    totalX >  minSwipe && !isCompanionOpen ->
+                                        scope.launch { leftDrawerState.open() }
+                                    totalX >  minSwipe &&  isCompanionOpen ->
+                                        scope.launch { rightPagerState.animateScrollToPage(0) }
+                                    totalX < -minSwipe ->
+                                        scope.launch { rightPagerState.animateScrollToPage(1) }
+                                }
+                            }
+                        },
                 ) { page ->
                     when (page) {
 
