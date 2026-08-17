@@ -724,6 +724,7 @@ fun MainEditorScreen(
                                         } // end editor Box
                                     }
                                 }
+                            } // end Scaffold content lambda
             } // end editor layer Box
 
             // ── Right companion panel layer ───────────────────────────────────
