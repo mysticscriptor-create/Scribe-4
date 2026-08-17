@@ -72,8 +72,6 @@ import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.input.nestedscroll.rememberNestedScrollInteropConnection
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -742,9 +740,7 @@ fun MainEditorScreen(
                                                         } catch (_: Exception) { }
                                                     }
                                                 },
-                                                modifier = Modifier
-                                                    .fillMaxSize()
-                                                    .nestedScroll(rememberNestedScrollInteropConnection())
+                                                modifier = Modifier.fillMaxSize()
                                             )
 
                                             CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
@@ -1630,11 +1626,7 @@ private fun PinnedNoteSlot(
 
                 // ── Note content (Sora read-only) ─────────────────────────────
                 AndroidView(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(bottom = 2.dp)
-                        .nestedScroll(rememberNestedScrollInteropConnection()),
+                    modifier = Modifier.weight(1f).fillMaxWidth().padding(bottom = 2.dp),
                     factory  = { ctx ->
                         CodeEditor(ctx).apply {
                             isEditable             = false
