@@ -72,14 +72,14 @@ import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.rememberNestedScrollInteropConnection
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.primaloptima.scribe.data.Folder
@@ -498,9 +498,7 @@ fun MainEditorScreen(
             // CompositionLocal but we know it is provided at this point in the tree.
             val hazeState = LocalHazeState.current ?: dev.chrisbanes.haze.HazeState()
 
-            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-
-                HorizontalPager(
+            HorizontalPager(
                     state                   = rightPagerState,
                     modifier                = Modifier.fillMaxSize(),
                     beyondViewportPageCount = 1,
@@ -744,7 +742,9 @@ fun MainEditorScreen(
                                                         } catch (_: Exception) { }
                                                     }
                                                 },
-                                                modifier = Modifier.fillMaxSize()
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .nestedScroll(rememberNestedScrollInteropConnection())
                                             )
 
                                             CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
@@ -860,7 +860,6 @@ fun MainEditorScreen(
                         }
                     }
                 }
-            }
         }
 
         // ── Floating Windows Overlay ──────────────────────────────────────────
@@ -1631,7 +1630,11 @@ private fun PinnedNoteSlot(
 
                 // ── Note content (Sora read-only) ─────────────────────────────
                 AndroidView(
-                    modifier = Modifier.weight(1f).fillMaxWidth().padding(bottom = 2.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(bottom = 2.dp)
+                        .nestedScroll(rememberNestedScrollInteropConnection()),
                     factory  = { ctx ->
                         CodeEditor(ctx).apply {
                             isEditable             = false
