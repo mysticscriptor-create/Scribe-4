@@ -74,10 +74,14 @@ import coil3.compose.AsyncImage
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -103,7 +107,6 @@ import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.event.EditorKeyEvent
 import com.primaloptima.scribe.util.ScribeProseLanguage
 import com.primaloptima.scribe.util.ThemeManager
-
 
 @OptIn(
     ExperimentalMaterial3Api::class,
@@ -307,89 +310,83 @@ fun MainEditorScreen(
         }
 
         // ── 3-page HorizontalPager ────────────────────────────────────────────
-        // PageSize.Fill — every page slot is full screen width. Page 0's Box is
-        // constrained to width(300.dp) and its background is transparent, so the
-        // editor (page 1) shows through on the right as a natural peek.
-        // Snapping to page 0 lands at offset 0, which is correct.
+        // Page 0 snaps at exactly 300dp so the editor is visible behind it.
+        // Pages 1 and 2 snap to full-screen. beyondViewportPageCount=1 keeps
+        // all pages composed so Sora editor state is never torn down.
         //
-        // The pointerInput intercepts swipe gestures and only forwards them to
-        // the pager when horizontal is ≥ 70 % dominant AND vertical isn't busy.
+        // The nestedScroll connection gates horizontal pager drags:
+        //   - Only lets the pager consume X if |dx| ≥ 70% of total gesture magnitude
+        //   - Blocks entirely if a vertical scroll is already in progress
+        // This prevents the pager from hijacking Sora scrolls or diagonal swipes.
+        var verticalScrollLocked by remember { mutableStateOf(false) }
+        val pagerGestureGuard = remember {
+            object : NestedScrollConnection {
+                // onPreScroll fires before children (Sora) see the drag.
+                // If the gesture isn't 70% horizontal, or a vertical scroll is
+                // already underway, steal X so the pager gets nothing.
+                override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                    val ax = kotlin.math.abs(available.x)
+                    val ay = kotlin.math.abs(available.y)
+                    val total = ax + ay
+                    if (total == 0f) return Offset.Zero
+                    val isVerticalDominant = ay / total > 0.30f  // not 70% horizontal
+                    if (verticalScrollLocked || isVerticalDominant) {
+                        // Consume all X — pager sees zero and won't scroll
+                        return Offset(available.x, 0f)
+                    }
+                    return Offset.Zero
+                }
+
+                // onPostScroll: if a child consumed Y, lock out horizontal for this gesture
+                override fun onPostScroll(
+                    consumed: Offset,
+                    available: Offset,
+                    source: NestedScrollSource
+                ): Offset {
+                    if (kotlin.math.abs(consumed.y) > 0f) verticalScrollLocked = true
+                    return Offset.Zero
+                }
+            }
+        }
+        // Reset the vertical lock on each finger-down so next gesture starts clean.
+        val gestureResetModifier = Modifier.pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) {
+                    awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                    verticalScrollLocked = false
+                }
+            }
+        }
+
+        // Custom PageSize: page 0 = 300dp, pages 1 & 2 = full screen.
+        // This makes the pager physically snap page 0 at 300dp width so the
+        // editor content shows in the remaining space — not blank.
+        val drawerPageSize = remember {
+            object : PageSize {
+                override fun Density.calculateMainAxisPageSize(
+                    availableSpace: Int,
+                    pageSpacing: Int
+                ): Int = when (pagerState.currentPage) {
+                    0    -> 300.dp.roundToPx()
+                    else -> if (pagerState.targetPage == 0) 300.dp.roundToPx() else availableSpace
+                }
+            }
+        }
+
         HorizontalPager(
-                state                   = pagerState,
-                modifier                = Modifier
-                    .fillMaxSize()
-                    .pointerInput(isKeyboardVisible) {
-                        if (isKeyboardVisible) return@pointerInput
-                        // Track the first meaningful move to decide axis dominance.
-                        var horizontalLocked  = false
-                        var verticalLocked    = false
-                        var totalDx           = 0f
-                        var totalDy           = 0f
-
-                        awaitPointerEventScope {
-                            while (true) {
-                                // Wait for the first finger down.
-                                val down = awaitPointerEvent()
-                                if (down.changes.none { it.pressed }) continue
-
-                                // Reset per-gesture state.
-                                horizontalLocked = false
-                                verticalLocked   = false
-                                totalDx          = 0f
-                                totalDy          = 0f
-
-                                // Accumulate moves until we can decide the dominant axis.
-                                loop@ while (true) {
-                                    val event = awaitPointerEvent()
-                                    val change = event.changes.firstOrNull() ?: break@loop
-
-                                    if (!change.pressed) break@loop   // finger lifted
-
-                                    val dx = change.position.x - change.previousPosition.x
-                                    val dy = change.position.y - change.previousPosition.y
-                                    totalDx += dx
-                                    totalDy += dy
-
-                                    val absDx = if (totalDx < 0) -totalDx else totalDx
-                                    val absDy = if (totalDy < 0) -totalDy else totalDy
-                                    val total  = absDx + absDy
-
-                                    if (total < 8f) continue@loop   // still deciding
-
-                                    if (!horizontalLocked && !verticalLocked) {
-                                        if (absDx / total >= 0.70f) {
-                                            horizontalLocked = true
-                                            // Horizontal is dominant: do NOT consume.
-                                            // The pager's own detector (below in the chain)
-                                            // will receive and handle these events normally.
-                                        } else {
-                                            verticalLocked = true
-                                        }
-                                    }
-
-                                    if (verticalLocked) {
-                                        // Vertical gesture owns this touch.
-                                        // Consume here so the pager's horizontal detector
-                                        // never sees the event and can't interfere with
-                                        // a vertical scroll already in progress.
-                                        change.consume()
-                                    }
-                                    // horizontalLocked → fall through without consuming;
-                                    // pager handles it naturally.
-                                }
-                            }
-                        }
-                    },
-                beyondViewportPageCount = 1,
-                userScrollEnabled       = !isKeyboardVisible,
-                pageSize                = PageSize.Fill,
-                key                     = { it }
-            ) { page ->
+            state                   = pagerState,
+            modifier                = Modifier
+                .fillMaxSize()
+                .then(gestureResetModifier)
+                .nestedScroll(pagerGestureGuard),
+            beyondViewportPageCount = 1,
+            userScrollEnabled       = !isKeyboardVisible,
+            pageSize                = drawerPageSize,
+            key                     = { it }
+        ) { page ->
             when (page) {
 
                 // ── Page 0: Left drawer ───────────────────────────────────────
-                // Full-width slot; only the inner Box is 300 dp wide. The rest of
-                // the slot is transparent so the editor peeks through on the right.
                 0 -> {
                     CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
                         Box(
