@@ -113,7 +113,8 @@ import com.primaloptima.scribe.util.ThemeManager
 @OptIn(
     ExperimentalMaterial3Api::class,
     androidx.compose.foundation.ExperimentalFoundationApi::class,
-    androidx.compose.foundation.layout.ExperimentalLayoutApi::class
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+    kotlin.ExperimentalStdlibApi::class
 )
 @Composable
 fun MainEditorScreen(
