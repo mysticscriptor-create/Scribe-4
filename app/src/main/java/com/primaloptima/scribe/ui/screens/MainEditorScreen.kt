@@ -70,10 +70,12 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.wrapContentWidth
 import coil3.compose.AsyncImage
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -103,6 +105,7 @@ import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.event.EditorKeyEvent
 import com.primaloptima.scribe.util.ScribeProseLanguage
 import com.primaloptima.scribe.util.ThemeManager
+
 
 @OptIn(
     ExperimentalMaterial3Api::class,
@@ -306,20 +309,95 @@ fun MainEditorScreen(
         }
 
         // ── 3-page HorizontalPager ────────────────────────────────────────────
-        // Page 0 uses a fixed 300dp width so the editor peeks on the right.
-        // Pages 1 and 2 are full-screen. beyondViewportPageCount=1 keeps all
-        // pages composed so Sora editor state is never torn down.
-        HorizontalPager(
-            state                   = pagerState,
-            modifier                = Modifier.fillMaxSize(),
-            beyondViewportPageCount = 1,
-            userScrollEnabled       = !isKeyboardVisible,
-            pageSize                = PageSize.Fill,
-            key                     = { it }
-        ) { page ->
+        // Page 0 snaps at exactly 300 dp (drawer width) so the editor is always
+        // visible on the right.  PageSize.Fixed(300.dp) tells the pager each
+        // page slot is 300 dp wide; pages 1 and 2 use wrapContentWidth(unbounded)
+        // + explicit fillMaxSize so they bleed to full screen width.
+        //
+        // The outer pointerInput intercepts swipe gestures and only forwards
+        // them to the pager when:
+        //   (a) horizontal component is ≥ 70 % of total movement, AND
+        //   (b) a vertical scroll hasn't already claimed the gesture.
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val screenWidthDp = maxWidth   // Dp snapshot captured once in composition
+
+            HorizontalPager(
+                state                   = pagerState,
+                modifier                = Modifier
+                    .fillMaxSize()
+                    .pointerInput(isKeyboardVisible) {
+                        if (isKeyboardVisible) return@pointerInput
+                        // Track the first meaningful move to decide axis dominance.
+                        var horizontalLocked  = false
+                        var verticalLocked    = false
+                        var totalDx           = 0f
+                        var totalDy           = 0f
+
+                        awaitPointerEventScope {
+                            while (true) {
+                                // Wait for the first finger down.
+                                val down = awaitPointerEvent()
+                                if (down.changes.none { it.pressed }) continue
+
+                                // Reset per-gesture state.
+                                horizontalLocked = false
+                                verticalLocked   = false
+                                totalDx          = 0f
+                                totalDy          = 0f
+
+                                // Accumulate moves until we can decide the dominant axis.
+                                loop@ while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull() ?: break@loop
+
+                                    if (!change.pressed) break@loop   // finger lifted
+
+                                    val dx = change.position.x - change.previousPosition.x
+                                    val dy = change.position.y - change.previousPosition.y
+                                    totalDx += dx
+                                    totalDy += dy
+
+                                    val absDx = if (totalDx < 0) -totalDx else totalDx
+                                    val absDy = if (totalDy < 0) -totalDy else totalDy
+                                    val total  = absDx + absDy
+
+                                    if (total < 8f) continue@loop   // still deciding
+
+                                    if (!horizontalLocked && !verticalLocked) {
+                                        if (absDx / total >= 0.70f) {
+                                            horizontalLocked = true
+                                            // Horizontal is dominant: do NOT consume.
+                                            // The pager's own detector (below in the chain)
+                                            // will receive and handle these events normally.
+                                        } else {
+                                            verticalLocked = true
+                                        }
+                                    }
+
+                                    if (verticalLocked) {
+                                        // Vertical gesture owns this touch.
+                                        // Consume here so the pager's horizontal detector
+                                        // never sees the event and can't interfere with
+                                        // a vertical scroll already in progress.
+                                        change.consume()
+                                    }
+                                    // horizontalLocked → fall through without consuming;
+                                    // pager handles it naturally.
+                                }
+                            }
+                        }
+                    },
+                beyondViewportPageCount = 1,
+                userScrollEnabled       = !isKeyboardVisible,
+                pageSize                = PageSize.Fixed(300.dp),
+                key                     = { it }
+            ) { page ->
             when (page) {
 
                 // ── Page 0: Left drawer ───────────────────────────────────────
+                // Page slot is 300 dp (matches PageSize.Fixed above), so the
+                // pager snaps with the drawer occupying exactly 300 dp and the
+                // editor peeking on the right.
                 0 -> {
                     CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
                         Box(
@@ -436,7 +514,17 @@ fun MainEditorScreen(
                 }
 
                 // ── Page 1: Main editor ───────────────────────────────────────
+                // The page slot is 300 dp (PageSize.Fixed), but the editor must
+                // fill the full screen.  wrapContentWidth(unbounded = true) lets
+                // this Box exceed the slot width; we then hard-set it to
+                // screenWidthDp so it always fills the display.
                 1 -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .wrapContentWidth(unbounded = true)
+                    .width(screenWidthDp)
+            ) {
             // ── Main editor ───────────────────────────────────────────────────
             Scaffold(
                                 containerColor      = Color.Transparent,
@@ -745,10 +833,18 @@ fun MainEditorScreen(
                                     }
                                 }
                             } // end Scaffold content lambda
+            } // end full-screen Box for page 1
                 } // end page 1
 
                 // ── Page 2: Right companion panel ─────────────────────────────
+                // Same trick as page 1 — bleed past the 300 dp slot to full width.
                 else -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .wrapContentWidth(unbounded = true)
+                            .width(screenWidthDp)
+                    ) {
                     RightCompanionPanel(
                         rightPanelTab         = rightPanelTab,
                         onTabChange           = { rightPanelTab = it },
@@ -782,10 +878,12 @@ fun MainEditorScreen(
                         barBlurBitmap         = barBlurBitmap,
                         hazeState             = hazeState,
                     )
+                    } // end full-screen Box for page 2
                 } // end page 2
 
             } // end when(page)
         } // end HorizontalPager
+        } // end BoxWithConstraints
 
         // ── Floating Windows Overlay ──────────────────────────────────────────
         val mappedNotes = remember(currentBookNotes, worldEntries) {
