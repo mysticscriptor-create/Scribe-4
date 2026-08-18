@@ -97,7 +97,6 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.MutatePriority
-import androidx.compose.foundation.gestures.scroll
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 // ── Sora Editor imports ───────────────────────────────────────────────────────
@@ -937,7 +936,7 @@ fun MainEditorScreen(
                     // ── Companion panel (page 1) ──────────────────────────────
                     RightCompanionPanel(
                         rightPanelTab         = rightPanelTab,
-                        onTabChange           = { rightPanelTab = it },
+                        onTabChange           = { tab: Int -> rightPanelTab = tab },
                         pinnedTopNotes        = pinnedTopNotes,
                         pinnedTopIndex        = pinnedTopIndex,
                         pinnedBottomNotes     = pinnedBottomNotes,
@@ -955,13 +954,13 @@ fun MainEditorScreen(
                         onPrevTop             = { editorVm.prevPinnedTop() },
                         onNextTop             = { editorVm.nextPinnedTop() },
                         onSwitchTop           = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
-                        onEditTop             = { id -> editorVm.loadNote(id) },
-                        onRemoveTop           = { id -> editorVm.removePinnedTop(id) },
+                        onEditTop             = { id: String -> editorVm.loadNote(id) },
+                        onRemoveTop           = { id: String -> editorVm.removePinnedTop(id) },
                         onPrevBottom          = { editorVm.prevPinnedBottom() },
                         onNextBottom          = { editorVm.nextPinnedBottom() },
                         onSwitchBottom        = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
-                        onEditBottom          = { id -> editorVm.loadNote(id) },
-                        onRemoveBottom        = { id -> editorVm.removePinnedBottom(id) },
+                        onEditBottom          = { id: String -> editorVm.loadNote(id) },
+                        onRemoveBottom        = { id: String -> editorVm.removePinnedBottom(id) },
                         onPickTop             = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
                         onPickBottom          = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
                         onClose               = { scope.launch { pagerState.animateScrollToPage(0) } },
@@ -1051,7 +1050,7 @@ fun MainEditorScreen(
                 FileExplorerOverlayDialog(
                     allNotes     = if (leftDrawerMode == "Current") currentBookNotes else allNotes,
                     allFolders   = if (leftDrawerMode == "Current") currentBookFolders else allFolders,
-                    onSelectNote = { note ->
+                    onSelectNote = { note: Note ->
                         if (targetSlot == "top") editorVm.addPinnedTop(note.id)
                         else editorVm.addPinnedBottom(note.id)
                         filePickerTargetSlot = null
@@ -1232,7 +1231,7 @@ private fun RightCompanionPanel(
                                         // ── Drag-resizable divider ────────────
                                         SplitDivider(
                                             isHorizontal  = true,
-                                            onDrag        = { delta ->
+                                            onDrag        = { delta: Float ->
                                                 splitFraction = (splitFraction + delta / totalPxFloat)
                                                     .coerceIn(0.2f, 0.8f)
                                             },
@@ -1288,7 +1287,7 @@ private fun RightCompanionPanel(
                                         // ── Drag-resizable divider ────────────
                                         SplitDivider(
                                             isHorizontal  = false,
-                                            onDrag        = { delta ->
+                                            onDrag        = { delta: Float ->
                                                 splitFraction = (splitFraction + delta / totalPxFloat)
                                                     .coerceIn(0.2f, 0.8f)
                                             },
