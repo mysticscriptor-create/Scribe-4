@@ -968,7 +968,8 @@ fun MainEditorScreen(
                         hazeState             = hazeState,
                     )
                 } // end page 1 (companion)
-            } // end HorizontalPager
+            } // end when (page)
+        } // end HorizontalPager
 
         // ── Floating Windows Overlay ────────────────────────────────────────── 
         // (still inside the outer Box, overlays both pager pages)
@@ -1059,7 +1060,6 @@ fun MainEditorScreen(
                 )
             }
         }
-        } // end outer Box
     } // end ModalNavigationDrawer content lambda
 }
 
