@@ -359,16 +359,19 @@ fun MainEditorScreen(
         }
 
         // Custom PageSize: page 0 = 300dp, pages 1 & 2 = full screen.
-        // This makes the pager physically snap page 0 at 300dp width so the
-        // editor content shows in the remaining space — not blank.
-        val drawerPageSize = remember {
-            object : PageSize {
-                override fun Density.calculateMainAxisPageSize(
-                    availableSpace: Int,
-                    pageSpacing: Int
-                ): Int = when (pagerState.currentPage) {
-                    0    -> 300.dp.roundToPx()
-                    else -> if (pagerState.targetPage == 0) 300.dp.roundToPx() else availableSpace
+        // The override uses `with(this)` because PageSize.calculateMainAxisPageSize
+        // is declared as a Density extension function — the receiver must be explicit.
+        // pagerState is read directly (not captured in remember) so it stays reactive.
+        val drawerPageSize = object : PageSize {
+            override fun Density.calculateMainAxisPageSize(
+                availableSpace: Int,
+                pageSpacing: Int
+            ): Int {
+                val dp300 = with(this) { 300.dp.roundToPx() }
+                return when {
+                    pagerState.currentPage == 0 -> dp300
+                    pagerState.targetPage == 0  -> dp300
+                    else                        -> availableSpace
                 }
             }
         }
