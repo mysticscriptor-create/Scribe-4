@@ -9,13 +9,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -24,7 +17,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -45,6 +37,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import android.graphics.Bitmap
 import android.os.Build
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PageSize
+import androidx.compose.foundation.pager.rememberPagerState
+import com.primaloptima.scribe.ui.theme.LocalBarBlurBitmap
 import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
 import com.primaloptima.scribe.ui.theme.LocalSolidSurface
@@ -75,7 +71,6 @@ import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -95,7 +90,6 @@ import com.primaloptima.scribe.viewmodel.NoteListViewModel
 import com.primaloptima.scribe.viewmodel.ShortcutsViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 // ── Sora Editor imports ───────────────────────────────────────────────────────
@@ -130,50 +124,23 @@ fun MainEditorScreen(
     val context = LocalContext.current
     val scope   = rememberCoroutineScope()
 
-    // 0f = closed, 1f = fully open — both panels are driven by Animatable for
-    // finger-tracking. Spring with no bounce matches native Material drawer feel.
-    val panelSpring = spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
-    val leftDrawerOffset  = remember { Animatable(0f) }
-    val rightPanelOffset  = remember { Animatable(0f) }
-    val isCompanionOpen by remember { derivedStateOf { rightPanelOffset.value > 0.5f } }
+    // 3-page pager: 0 = left drawer, 1 = editor (home), 2 = right companion.
+    // HorizontalPager owns all gesture physics — no manual Animatable needed.
+    val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
 
     // ── Frosted-glass blur bitmaps (pre-API-31 fallback) ─────────────────────
+    // Left and right panels use LocalBarBlurBitmap (pre-blurred by ScribeTheme)
+    // so no runtime capture is needed for panels. Only dialogs capture on-demand.
     val view         = LocalView.current
     val blurRadiusPx = com.primaloptima.scribe.ui.theme.LocalFrostedBlurRadius.current
         .toInt().coerceIn(1, 25)
-    var leftOneShotBitmap  by remember { mutableStateOf<Bitmap?>(null) }
-    var leftCaptured       by remember { mutableStateOf(false) }
     var dialogOneShotBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var barBlurBitmap      by remember { mutableStateOf<Bitmap?>(null) }
+    val barBlurBitmap = LocalBarBlurBitmap.current
 
     val editorTheme  = LocalAppTheme.current
     val editorBgUri  = editorTheme?.backgroundImageUri
 
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-        LaunchedEffect(editorBgUri) {
-            barBlurBitmap = null
-            if (!editorBgUri.isNullOrEmpty()) {
-                kotlinx.coroutines.delay(150)
-                val raw = BitmapBlur.captureOnly(view)
-                barBlurBitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    raw?.let { BitmapBlur.blurBitmap(it, radius = blurRadiusPx) }
-                }
-            }
-        }
-        LaunchedEffect(leftDrawerOffset.value > 0f) {
-            val opening = leftDrawerOffset.value > 0f
-            if (opening && !leftCaptured) {
-                leftCaptured = true
-                val raw = BitmapBlur.captureOnly(view)
-                leftOneShotBitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    raw?.let { BitmapBlur.blurBitmap(it, radius = blurRadiusPx) }
-                }
-            } else if (!opening) {
-                leftCaptured      = false
-                leftOneShotBitmap = null
-            }
-        }
-    }
+    // No panel-blur capture needed — LocalBarBlurBitmap from ScribeTheme is used directly.
 
     // ── ViewModel state ───────────────────────────────────────────────────────
     val activeNote     by editorVm.activeNote.collectAsStateWithLifecycle()
@@ -296,93 +263,21 @@ fun MainEditorScreen(
     }
 
     // ── Back-press handlers ───────────────────────────────────────────────────
-    if (isCompanionOpen) {
-        BackHandler { scope.launch { rightPanelOffset.animateTo(0f, panelSpring) } }
-    }
-    if (leftDrawerOffset.value > 0f) {
-        BackHandler { scope.launch { leftDrawerOffset.animateTo(0f, panelSpring) } }
+    // Pages 0 and 2 snap back to editor (page 1). Page 1 exits the editor.
+    if (pagerState.currentPage != 1) {
+        BackHandler { scope.launch { pagerState.animateScrollToPage(1) } }
     }
 
-    // ── Gesture state machine ─────────────────────────────────────────────────
-    // Placed on the outer Box as a modifier — NOT as a separate child Box.
-    // A separate empty Box with zIndex(10f) + fillMaxSize() blocks ALL touches
-    // even when it doesn't consume them, because it sits above the content.
-    // By putting pointerInput directly on the wrapping Box, we observe events
-    // at PointerEventPass.Initial (before children see them) without adding any
-    // new hit-testable layer that could swallow taps.
-    //
-    // Only confirmed HORIZ events are consumed. VERT and UNDECIDED events are
-    // never consumed, so Sora Editor and all Compose children receive them
-    // exactly as if the coordinator weren't there.
+    // ── 3-page pager layout ───────────────────────────────────────────────────
+    // Page 0 = Left drawer (partial width, editor peeks right)
+    // Page 1 = Editor (home position, full screen)
+    // Page 2 = Right companion panel (full screen)
+    // HorizontalPager owns all swipe physics — no manual gesture detector needed.
     val isKeyboardVisible = WindowInsets.isImeVisible
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .pointerInput(isKeyboardVisible) {
-                if (isKeyboardVisible) return@pointerInput
-                val slop     = viewConfiguration.touchSlop
-                val minFling = 500.dp.toPx()
-                val UNDECIDED = 0; val HORIZ = 1; val VERT = 2
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val vt   = VelocityTracker()
-                    vt.addPosition(down.uptimeMillis, down.position)
-                    var totalX = 0f; var totalY = 0f
-                    var dir    = UNDECIDED
-                    while (true) {
-                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                        val p = event.changes.find { it.id == down.id } ?: break
-                        if (!p.pressed) break
-                        val delta = p.position - p.previousPosition
-                        totalX += delta.x; totalY += delta.y
-                        vt.addPosition(p.uptimeMillis, p.position)
-                        if (dir == UNDECIDED) {
-                            val ax = abs(totalX); val ay = abs(totalY)
-                            if (ax > slop || ay > slop) {
-                                // 1.5× bias: clearly diagonal scrolls stay with Sora
-                                dir = if (ax >= ay * 1.5f) HORIZ else VERT
-                            }
-                        }
-                        // ONLY consume when we have confirmed horizontal intent.
-                        // VERT and UNDECIDED pass through untouched — Sora, buttons,
-                        // and all other children receive those events normally.
-                        if (dir == HORIZ) p.consume()
-                    }
-                    if (dir != HORIZ) return@awaitEachGesture
-                    // ── Finger lifted after confirmed horizontal swipe ────────
-                    val vel        = vt.calculateVelocity()
-                    val goingRight = totalX > 0f
-                    val currentLeft  = leftDrawerOffset.value
-                    val currentRight = rightPanelOffset.value
-                    if (goingRight) {
-                        if (isCompanionOpen) {
-                            val open = if (vel.x > minFling) false
-                                       else if (vel.x < -minFling) true
-                                       else currentRight > 0.4f
-                            scope.launch { rightPanelOffset.animateTo(if (open) 1f else 0f, panelSpring) }
-                        } else {
-                            val open = if (vel.x > minFling) true
-                                       else if (vel.x < -minFling) false
-                                       else currentLeft > 0.4f
-                            scope.launch { leftDrawerOffset.animateTo(if (open) 1f else 0f, panelSpring) }
-                        }
-                    } else {
-                        if (leftDrawerOffset.value > 0f) {
-                            val open = if (vel.x < -minFling) false
-                                       else if (vel.x > minFling) true
-                                       else currentLeft > 0.4f
-                            scope.launch { leftDrawerOffset.animateTo(if (open) 1f else 0f, panelSpring) }
-                        } else {
-                            val open = if (vel.x < -minFling) true
-                                       else if (vel.x > minFling) false
-                                       else currentRight > 0.4f
-                            scope.launch { rightPanelOffset.animateTo(if (open) 1f else 0f, panelSpring) }
-                        }
-                    }
-                }
-            }
-    ) {
-        // ── Editor-only background image ──────────────────────────────────────
+    Box(modifier = Modifier.fillMaxSize()) {
+        val hazeState = LocalHazeState.current ?: dev.chrisbanes.haze.HazeState()
+
+        // ── Editor-only background image (shown behind all pages) ─────────────
         if (isEditorOnlyBg) {
             AsyncImage(
                 model            = bgUri,
@@ -408,19 +303,138 @@ fun MainEditorScreen(
             Box(Modifier.fillMaxSize().background(themeBgColor.copy(alpha = bgOpacity)))
         }
 
-        // ── Derive pixel sizes for graphicsLayer offsets ──────────────────────
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val density    = androidx.compose.ui.platform.LocalDensity.current
-            val screenWPx  = with(density) { maxWidth.toPx() }
-            val drawerWPx  = with(density) { 300.dp.toPx() }
-            val hazeState  = LocalHazeState.current ?: dev.chrisbanes.haze.HazeState()
+        // ── 3-page HorizontalPager ────────────────────────────────────────────
+        // Page 0 uses a fixed 300dp width so the editor peeks on the right.
+        // Pages 1 and 2 are full-screen. beyondViewportPageCount=1 keeps all
+        // pages composed so Sora editor state is never torn down.
+        HorizontalPager(
+            state                   = pagerState,
+            modifier                = Modifier.fillMaxSize(),
+            beyondViewportPageCount = 1,
+            userScrollEnabled       = !isKeyboardVisible,
+            pageSize                = PageSize.Fill,
+            key                     = { it }
+        ) { page ->
+            when (page) {
 
-            // ── Editor layer (slides left when companion opens) ────────────────
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { translationX = -rightPanelOffset.value * screenWPx }
-            ) {
+                // ── Page 0: Left drawer ───────────────────────────────────────
+                0 -> {
+                    CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .width(300.dp)
+                        ) {
+                            ModalDrawerSheet(
+                                drawerContainerColor = Color.Transparent,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .frostedPanel(hazeState)
+                            ) {
+                                Spacer(Modifier.height(12.dp))
+                                PrimaryTabRow(selectedTabIndex = leftPanelTab) {
+                                    Tab(selected = leftPanelTab == 0, onClick = { leftPanelTab = 0 },
+                                        text = { Text("Files", fontWeight = FontWeight.Bold) })
+                                    Tab(selected = leftPanelTab == 1, onClick = { leftPanelTab = 1 },
+                                        text = { Text("World", fontWeight = FontWeight.Bold) })
+                                }
+                                Row(
+                                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    FilterChip(selected = leftDrawerMode == "Current", onClick = { leftDrawerMode = "Current" },
+                                        label = { Text("Current Book", fontSize = 12.sp) })
+                                    FilterChip(selected = leftDrawerMode == "Books", onClick = { leftDrawerMode = "Books" },
+                                        label = { Text("All Books", fontSize = 12.sp) })
+                                }
+                                HorizontalDivider(Modifier.padding(bottom = 4.dp))
+                                val displayNotes   = if (leftDrawerMode == "Current") currentBookNotes else allNotes
+                                val displayFolders = if (leftDrawerMode == "Current") currentBookFolders else allFolders
+                                val folderGrouped2 = remember(displayNotes, displayFolders) {
+                                    buildMap<String, MutableList<Note>> {
+                                        displayNotes.forEach { n ->
+                                            getOrPut(n.folderPath.ifBlank { "/" }) { mutableListOf() }.add(n)
+                                        }
+                                    }
+                                }
+                                Row(
+                                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Notes", fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    IconButton(
+                                        onClick = { scope.launch { captureForDialog { showCreateNoteDialog = true } } },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = "New Note", modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                                LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
+                                    folderGrouped2.forEach { (folderPath, notesInFolder) ->
+                                        val isExpanded = expandedTreeState[folderPath] ?: true
+                                        item(key = "fd_$folderPath") {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
+                                                    .clickable { expandedTreeState[folderPath] = !isExpanded }
+                                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(if (isExpanded) Icons.Default.KeyboardArrowDown
+                                                     else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                                     contentDescription = null, modifier = Modifier.size(16.dp),
+                                                     tint = MaterialTheme.colorScheme.outline)
+                                                Spacer(Modifier.width(4.dp))
+                                                Icon(if (isExpanded) Icons.Default.FolderOpen else Icons.Default.Folder,
+                                                     contentDescription = null, tint = MaterialTheme.colorScheme.primary,
+                                                     modifier = Modifier.size(16.dp))
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(folderPath.substringAfterLast('/').ifEmpty { "Root" },
+                                                     fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
+                                                     modifier = Modifier.weight(1f))
+                                                Text("${notesInFolder.size}", fontSize = 11.sp,
+                                                     color = MaterialTheme.colorScheme.outline)
+                                            }
+                                        }
+                                        if (isExpanded) {
+                                            items(notesInFolder, key = { "nd_${it.id}" }) { note ->
+                                                val isActive = note.id == activeNote?.id
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth()
+                                                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                                                        .clip(RoundedCornerShape(8.dp))
+                                                        .background(if (isActive) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else Color.Transparent)
+                                                        .clickable {
+                                                            editorVm.loadNote(note.id)
+                                                            scope.launch { pagerState.animateScrollToPage(1) }
+                                                        }
+                                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(Icons.Outlined.Description, contentDescription = null,
+                                                        modifier = Modifier.size(14.dp),
+                                                        tint = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+                                                    Spacer(Modifier.width(8.dp))
+                                                    Text(note.name, fontSize = 14.sp,
+                                                        fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                                                        color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                                        modifier = Modifier.weight(1f))
+                                                    Text("${note.wordCount}w", fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.outline)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── Page 1: Main editor ───────────────────────────────────────
+                1 -> {
             // ── Main editor ───────────────────────────────────────────────────
             Scaffold(
                                 containerColor      = Color.Transparent,
@@ -430,7 +444,7 @@ fun MainEditorScreen(
                                     Box {
                                         ScribeEditorTopBar(
                                             title          = activeNote?.name,
-                                            onNavClick     = { scope.launch { leftDrawerOffset.animateTo(1f, panelSpring) } },
+                                            onNavClick     = { scope.launch { pagerState.animateScrollToPage(0) } },
                                             onTitleClick   = {
                                                 if (activeNote != null)
                                                     scope.launch { captureForDialog { showRenameDialog = true } }
@@ -438,7 +452,7 @@ fun MainEditorScreen(
                                             navigationIcon = Icons.Default.Menu,
                                             visible        = !zenMode,
                                             actions        = listOf(
-                                                ScribeBarAction(Icons.Default.Dock,        "Outline & Pinned Notes") { scope.launch { rightPanelOffset.animateTo(1f, panelSpring) } },
+                                                ScribeBarAction(Icons.Default.Dock,        "Outline & Pinned Notes") { scope.launch { pagerState.animateScrollToPage(2) } },
                                                 ScribeBarAction(Icons.Default.Search,      "Find")                   { showFindBar = !showFindBar },
                                                 ScribeBarAction(Icons.Default.BookmarkAdd, "Save Checkpoint")        {
                                                     editorVm.saveManualSnapshot(soraEditorRef?.text?.toString() ?: "")
@@ -729,175 +743,47 @@ fun MainEditorScreen(
                                     }
                                 }
                             } // end Scaffold content lambda
-            } // end editor layer Box
+                } // end page 1
 
-            // ── Right companion panel layer ───────────────────────────────────
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { translationX = (1f - rightPanelOffset.value) * screenWPx }
-            ) {
-                RightCompanionPanel(
-                    rightPanelTab         = rightPanelTab,
-                    onTabChange           = { rightPanelTab = it },
-                    pinnedTopNotes        = pinnedTopNotes,
-                    pinnedTopIndex        = pinnedTopIndex,
-                    pinnedBottomNotes     = pinnedBottomNotes,
-                    pinnedBottomIndex     = pinnedBottomIndex,
-                    allNotes              = allNotes,
-                    worldEntries          = worldEntries,
-                    outline               = outline,
-                    activeTheme           = activeTheme,
-                    soraEditorRef         = soraEditorRef,
-                    tabBarAtBottom        = companionTabBarBottom,
-                    splitHorizontal       = companionSplitHorizontal,
-                    onToggleTabBarPos     = { editorVm.setCompanionTabBarBottom(!companionTabBarBottom) },
-                    onToggleSplitLayout   = { editorVm.setCompanionSplitHorizontal(!companionSplitHorizontal) },
-                    onSwapSlots           = { editorVm.swapPinnedSlots() },
-                    onPrevTop             = { editorVm.prevPinnedTop() },
-                    onNextTop             = { editorVm.nextPinnedTop() },
-                    onSwitchTop           = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
-                    onEditTop             = { id -> editorVm.loadNote(id) },
-                    onRemoveTop           = { id -> editorVm.removePinnedTop(id) },
-                    onPrevBottom          = { editorVm.prevPinnedBottom() },
-                    onNextBottom          = { editorVm.nextPinnedBottom() },
-                    onSwitchBottom        = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
-                    onEditBottom          = { id -> editorVm.loadNote(id) },
-                    onRemoveBottom        = { id -> editorVm.removePinnedBottom(id) },
-                    onPickTop             = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
-                    onPickBottom          = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
-                    onClose               = { scope.launch { rightPanelOffset.animateTo(0f, panelSpring) } },
-                    barBlurBitmap         = barBlurBitmap,
-                    hazeState             = hazeState,
-                )
-            } // end companion layer Box
+                // ── Page 2: Right companion panel ─────────────────────────────
+                else -> {
+                    RightCompanionPanel(
+                        rightPanelTab         = rightPanelTab,
+                        onTabChange           = { rightPanelTab = it },
+                        pinnedTopNotes        = pinnedTopNotes,
+                        pinnedTopIndex        = pinnedTopIndex,
+                        pinnedBottomNotes     = pinnedBottomNotes,
+                        pinnedBottomIndex     = pinnedBottomIndex,
+                        allNotes              = allNotes,
+                        worldEntries          = worldEntries,
+                        outline               = outline,
+                        activeTheme           = activeTheme,
+                        soraEditorRef         = soraEditorRef,
+                        tabBarAtBottom        = companionTabBarBottom,
+                        splitHorizontal       = companionSplitHorizontal,
+                        onToggleTabBarPos     = { editorVm.setCompanionTabBarBottom(!companionTabBarBottom) },
+                        onToggleSplitLayout   = { editorVm.setCompanionSplitHorizontal(!companionSplitHorizontal) },
+                        onSwapSlots           = { editorVm.swapPinnedSlots() },
+                        onPrevTop             = { editorVm.prevPinnedTop() },
+                        onNextTop             = { editorVm.nextPinnedTop() },
+                        onSwitchTop           = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
+                        onEditTop             = { id -> editorVm.loadNote(id) },
+                        onRemoveTop           = { id -> editorVm.removePinnedTop(id) },
+                        onPrevBottom          = { editorVm.prevPinnedBottom() },
+                        onNextBottom          = { editorVm.nextPinnedBottom() },
+                        onSwitchBottom        = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
+                        onEditBottom          = { id -> editorVm.loadNote(id) },
+                        onRemoveBottom        = { id -> editorVm.removePinnedBottom(id) },
+                        onPickTop             = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
+                        onPickBottom          = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
+                        onClose               = { scope.launch { pagerState.animateScrollToPage(1) } },
+                        barBlurBitmap         = barBlurBitmap,
+                        hazeState             = hazeState,
+                    )
+                } // end page 2
 
-            // ── Left drawer scrim ─────────────────────────────────────────────
-            if (leftDrawerOffset.value > 0f) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer { alpha = leftDrawerOffset.value * 0.5f }
-                        .background(Color.Black)
-                        .clickable { scope.launch { leftDrawerOffset.animateTo(0f, panelSpring) } }
-                )
-            }
-
-            // ── Left drawer panel ─────────────────────────────────────────────
-            CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(300.dp)
-                        .graphicsLayer { translationX = (leftDrawerOffset.value - 1f) * drawerWPx }
-                ) {
-                    ModalDrawerSheet(
-                        drawerContainerColor = Color.Transparent,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .frostedPanel(hazeState)
-                    ) {
-                        Spacer(Modifier.height(12.dp))
-                        PrimaryTabRow(selectedTabIndex = leftPanelTab) {
-                            Tab(selected = leftPanelTab == 0, onClick = { leftPanelTab = 0 },
-                                text = { Text("Files", fontWeight = FontWeight.Bold) })
-                            Tab(selected = leftPanelTab == 1, onClick = { leftPanelTab = 1 },
-                                text = { Text("World", fontWeight = FontWeight.Bold) })
-                        }
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            FilterChip(selected = leftDrawerMode == "Current", onClick = { leftDrawerMode = "Current" },
-                                label = { Text("Current Book", fontSize = 12.sp) })
-                            FilterChip(selected = leftDrawerMode == "Books", onClick = { leftDrawerMode = "Books" },
-                                label = { Text("All Books", fontSize = 12.sp) })
-                        }
-                        HorizontalDivider(Modifier.padding(bottom = 4.dp))
-                        val displayNotes   = if (leftDrawerMode == "Current") currentBookNotes else allNotes
-                        val displayFolders = if (leftDrawerMode == "Current") currentBookFolders else allFolders
-                        val folderGrouped2 = remember(displayNotes, displayFolders) {
-                            buildMap<String, MutableList<Note>> {
-                                displayNotes.forEach { n ->
-                                    getOrPut(n.folderPath.ifBlank { "/" }) { mutableListOf() }.add(n)
-                                }
-                            }
-                        }
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Notes", fontWeight = FontWeight.Bold, fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            IconButton(
-                                onClick = { scope.launch { captureForDialog { showCreateNoteDialog = true } } },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(Icons.Default.Add, contentDescription = "New Note", modifier = Modifier.size(18.dp))
-                            }
-                        }
-                        LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
-                            folderGrouped2.forEach { (folderPath, notesInFolder) ->
-                                val isExpanded = expandedTreeState[folderPath] ?: true
-                                item(key = "fd_$folderPath") {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
-                                            .clickable { expandedTreeState[folderPath] = !isExpanded }
-                                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(if (isExpanded) Icons.Default.KeyboardArrowDown
-                                             else Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                             contentDescription = null, modifier = Modifier.size(16.dp),
-                                             tint = MaterialTheme.colorScheme.outline)
-                                        Spacer(Modifier.width(4.dp))
-                                        Icon(if (isExpanded) Icons.Default.FolderOpen else Icons.Default.Folder,
-                                             contentDescription = null, tint = MaterialTheme.colorScheme.primary,
-                                             modifier = Modifier.size(16.dp))
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(folderPath.substringAfterLast('/').ifEmpty { "Root" },
-                                             fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
-                                             modifier = Modifier.weight(1f))
-                                        Text("${notesInFolder.size}", fontSize = 11.sp,
-                                             color = MaterialTheme.colorScheme.outline)
-                                    }
-                                }
-                                if (isExpanded) {
-                                    items(notesInFolder, key = { "nd_${it.id}" }) { note ->
-                                        val isActive = note.id == activeNote?.id
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth()
-                                                .padding(horizontal = 8.dp, vertical = 2.dp)
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(if (isActive) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else Color.Transparent)
-                                                .clickable {
-                                                    editorVm.loadNote(note.id)
-                                                    scope.launch { leftDrawerOffset.animateTo(0f, panelSpring) }
-                                                }
-                                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(Icons.Outlined.Description, contentDescription = null,
-                                                modifier = Modifier.size(14.dp),
-                                                tint = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(note.name, fontSize = 14.sp,
-                                                fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-                                                color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.weight(1f))
-                                            Text("${note.wordCount}w", fontSize = 11.sp,
-                                                color = MaterialTheme.colorScheme.outline)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } // end drawer panel
-        } // end BoxWithConstraints
+            } // end when(page)
+        } // end HorizontalPager
 
         // ── Floating Windows Overlay ──────────────────────────────────────────
         val mappedNotes = remember(currentBookNotes, worldEntries) {
