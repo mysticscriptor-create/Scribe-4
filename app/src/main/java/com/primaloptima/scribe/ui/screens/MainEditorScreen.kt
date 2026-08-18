@@ -11,8 +11,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -20,10 +18,11 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -66,9 +65,11 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.ui.res.painterResource
 import com.primaloptima.scribe.R
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.layout.BoxWithConstraints
+import dev.chrisbanes.haze.hazeSource
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 
@@ -95,10 +96,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
-import androidx.compose.ui.zIndex
-import androidx.compose.foundation.MutatePriority
-import androidx.compose.ui.layout.LayoutCoordinates
-import androidx.compose.ui.layout.onGloballyPositioned
 // ── Sora Editor imports ───────────────────────────────────────────────────────
 import androidx.compose.ui.viewinterop.AndroidView
 import io.github.rosemoe.sora.widget.CodeEditor
@@ -112,8 +109,7 @@ import com.primaloptima.scribe.util.ThemeManager
 @OptIn(
     ExperimentalMaterial3Api::class,
     androidx.compose.foundation.ExperimentalFoundationApi::class,
-    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
-    kotlin.ExperimentalStdlibApi::class
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class
 )
 @Composable
 fun MainEditorScreen(
@@ -132,12 +128,13 @@ fun MainEditorScreen(
     val context = LocalContext.current
     val scope   = rememberCoroutineScope()
 
-    // ── Navigation state — native M3 drawer + Compose pager ──────────────────
-    // DrawerState drives ModalNavigationDrawer (left panel).
-    // PagerState drives HorizontalPager: page 0 = editor, page 1 = companion.
-    val drawerState     = rememberDrawerState(initialValue = DrawerValue.Closed)
-    val pagerState      = rememberPagerState(initialPage = 0) { 2 }
-    val isCompanionOpen by remember { derivedStateOf { pagerState.currentPage == 1 || pagerState.currentPageOffsetFraction > 0.5f } }
+    val leftDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+
+    // ── Right companion pager ─────────────────────────────────────────────────
+    val rightPagerState  = rememberPagerState(initialPage = 0, pageCount = { 2 })
+    val isCompanionOpen by remember { derivedStateOf { rightPagerState.currentPage == 1 } }
+
+    LaunchedEffect(Unit) { leftDrawerState.snapTo(DrawerValue.Closed) }
 
     // ── Frosted-glass blur bitmaps (pre-API-31 fallback) ─────────────────────
     val view         = LocalView.current
@@ -162,15 +159,15 @@ fun MainEditorScreen(
                 }
             }
         }
-        LaunchedEffect(drawerState.isOpen) {
-            val opening = drawerState.isOpen
-            if (opening && !leftCaptured) {
+        LaunchedEffect(leftDrawerState.currentValue, leftDrawerState.targetValue) {
+            if (leftDrawerState.targetValue == DrawerValue.Open && !leftCaptured) {
                 leftCaptured = true
                 val raw = BitmapBlur.captureOnly(view)
                 leftOneShotBitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     raw?.let { BitmapBlur.blurBitmap(it, radius = blurRadiusPx) }
                 }
-            } else if (!opening) {
+            } else if (leftDrawerState.currentValue == DrawerValue.Closed &&
+                       leftDrawerState.targetValue == DrawerValue.Closed) {
                 leftCaptured      = false
                 leftOneShotBitmap = null
             }
@@ -244,12 +241,9 @@ fun MainEditorScreen(
     var loadedNoteId   by rememberSaveable { mutableStateOf<String?>(null) }
     val expandedTreeState = remember { mutableStateMapOf<String, Boolean>() }
 
-    var pillMode         by remember { mutableIntStateOf(0) }
-    var pillOffsetX      by remember { mutableFloatStateOf(0f) }
-    var pillOffsetY      by remember { mutableFloatStateOf(0f) }
-    // Gap-1 fix: stores the pill's live layout bounds so the gesture coordinator
-    // can detect when a DOWN event lands on the pill and skip gesture detection.
-    var pillLayoutCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var pillMode     by remember { mutableIntStateOf(0) }
+    var pillOffsetX  by remember { mutableFloatStateOf(0f) }
+    var pillOffsetY  by remember { mutableFloatStateOf(0f) }
 
     var prevWordCount   by remember { mutableIntStateOf(wordCount) }
     var deltaText       by remember { mutableStateOf<String?>(null) }
@@ -302,145 +296,13 @@ fun MainEditorScreen(
 
     // ── Back-press handlers ───────────────────────────────────────────────────
     if (isCompanionOpen) {
-        BackHandler { scope.launch { pagerState.animateScrollToPage(0) } }
+        BackHandler { scope.launch { rightPagerState.animateScrollToPage(0) } }
     }
-    if (drawerState.isOpen) {
-        BackHandler { scope.launch { drawerState.close() } }
+    if (leftDrawerState.isOpen) {
+        BackHandler { scope.launch { leftDrawerState.close() } }
     }
 
-    // ── Gesture coordinator — gates drawer and pager per the 6 rules ─────────
-    // Must be read here (Compose scope) so pointerInput key reacts to changes.
-    val isKeyboardVisible    = WindowInsets.isImeVisible
-    val isEditorTextSelected by remember { derivedStateOf { soraEditorRef?.cursor?.isSelected == true } }
-    // Rule 4: editor is "busy" when IME is up OR text is selected (handles visible).
-    val isEditorBusy         = isKeyboardVisible || isEditorTextSelected
-
-    val hazeState = LocalHazeState.current ?: dev.chrisbanes.haze.HazeState()
-
-    // ModalNavigationDrawer owns the left drawer with full native M3 gesture,
-    // spring physics, velocity tracking, and scrim. We gate its gesture through
-    // the coordinator below by controlling drawerState programmatically.
-    ModalNavigationDrawer(
-        drawerState        = drawerState,
-        // The drawer's own built-in swipe is DISABLED here intentionally.
-        // Our coordinator below decides when to open/close it via drawerState,
-        // giving us full control over Rule 3, 4, and the direction lock.
-        gesturesEnabled    = false,
-        drawerContent      = {
-            CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap) {
-                ModalDrawerSheet(
-                    drawerContainerColor = Color.Transparent,
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(300.dp)
-                        .frostedPanel(hazeState)
-                ) {
-                    Spacer(Modifier.height(12.dp))
-                    PrimaryTabRow(selectedTabIndex = leftPanelTab) {
-                        Tab(selected = leftPanelTab == 0, onClick = { leftPanelTab = 0 },
-                            text = { Text("Files", fontWeight = FontWeight.Bold) })
-                        Tab(selected = leftPanelTab == 1, onClick = { leftPanelTab = 1 },
-                            text = { Text("World", fontWeight = FontWeight.Bold) })
-                    }
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        FilterChip(selected = leftDrawerMode == "Current", onClick = { leftDrawerMode = "Current" },
-                            label = { Text("Current Book", fontSize = 12.sp) })
-                        FilterChip(selected = leftDrawerMode == "Books", onClick = { leftDrawerMode = "Books" },
-                            label = { Text("All Books", fontSize = 12.sp) })
-                    }
-                    HorizontalDivider(Modifier.padding(bottom = 4.dp))
-                    val displayNotes   = if (leftDrawerMode == "Current") currentBookNotes else allNotes
-                    val displayFolders = if (leftDrawerMode == "Current") currentBookFolders else allFolders
-                    val folderGrouped2 = remember(displayNotes, displayFolders) {
-                        buildMap<String, MutableList<Note>> {
-                            displayNotes.forEach { n ->
-                                getOrPut(n.folderPath.ifBlank { "/" }) { mutableListOf() }.add(n)
-                            }
-                        }
-                    }
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Notes", fontWeight = FontWeight.Bold, fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        IconButton(
-                            onClick = { scope.launch { captureForDialog { showCreateNoteDialog = true } } },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = "New Note", modifier = Modifier.size(18.dp))
-                        }
-                    }
-                    LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
-                        folderGrouped2.forEach { (folderPath, notesInFolder) ->
-                            val isExpanded = expandedTreeState[folderPath] ?: true
-                            item(key = "fd_$folderPath") {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
-                                        .clickable { expandedTreeState[folderPath] = !isExpanded }
-                                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(if (isExpanded) Icons.Default.KeyboardArrowDown
-                                         else Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                         contentDescription = null, modifier = Modifier.size(16.dp),
-                                         tint = MaterialTheme.colorScheme.outline)
-                                    Spacer(Modifier.width(4.dp))
-                                    Icon(if (isExpanded) Icons.Default.FolderOpen else Icons.Default.Folder,
-                                         contentDescription = null, tint = MaterialTheme.colorScheme.primary,
-                                         modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(folderPath.substringAfterLast('/').ifEmpty { "Root" },
-                                         fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
-                                         modifier = Modifier.weight(1f))
-                                    Text("${notesInFolder.size}", fontSize = 11.sp,
-                                         color = MaterialTheme.colorScheme.outline)
-                                }
-                            }
-                            if (isExpanded) {
-                                items(notesInFolder, key = { "nd_${it.id}" }) { note ->
-                                    val isActive = note.id == activeNote?.id
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth()
-                                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(if (isActive) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else Color.Transparent)
-                                            .clickable {
-                                                editorVm.loadNote(note.id)
-                                                scope.launch { drawerState.close() }
-                                            }
-                                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(Icons.Outlined.Description, contentDescription = null,
-                                            modifier = Modifier.size(14.dp),
-                                            tint = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(note.name, fontSize = 14.sp,
-                                            fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-                                            color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f))
-                                        Text("${note.wordCount}w", fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.outline)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    ) {
-        // ── Main content inside the drawer host ───────────────────────────────
-        // Box sits here so the background image and gesture coordinator overlay
-        // everything inside the drawer's content area.
-        Box(modifier = Modifier.fillMaxSize()) {
-
+    Box(modifier = Modifier.fillMaxSize()) {
         // ── Editor-only background image ──────────────────────────────────────
         if (isEditorOnlyBg) {
             AsyncImage(
@@ -467,160 +329,253 @@ fun MainEditorScreen(
             Box(Modifier.fillMaxSize().background(themeBgColor.copy(alpha = bgOpacity)))
         }
 
-        // ── 6-rule gesture coordinator ────────────────────────────────────────
-        // Sits at zIndex(10f) so it sees raw touches before HorizontalPager and
-        // Sora Editor. Uses PointerEventPass.Initial to observe every event first.
-        //
-        //   Rule 1: vertical dominant     → pass through; Sora scrolls freely.
-        //   Rule 2: right-to-left + !busy → pager swipes to companion page.
-        //   Rule 3: left-to-right + !busy → drawer opens via drawerState.
-        //   Rule 4: editor busy (IME up or text selected) → all horizontal
-        //            gestures pass through untouched to Sora.
-        //   Rule 5: direction is committed until finger lifts; no mid-gesture
-        //            direction change, no spurious panel triggers.
-        //   Rule 6: dominant axis determined once at first slop crossing;
-        //            subsequent drift in the other axis is ignored.
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .zIndex(10f)
-                .pointerInput(isEditorBusy) {
-                    if (isEditorBusy) return@pointerInput
-
-                    val slop     = viewConfiguration.touchSlop
-                    val UNDECIDED = 0; val HORIZ = 1; val VERT = 2
-
-                    awaitEachGesture {
-                        // Phase 1 — record DOWN
-                        val down = awaitFirstDown(requireUnconsumed = false)
-
-                        // ── Gap-1 fix: pill exclusion ─────────────────────────────────────
-                        // If the DOWN event landed on the pill, exit immediately.
-                        // This lets the pill's own drag handler run without the coordinator
-                        // consuming events or mistakenly triggering the drawer / pager.
-                        val pill = pillLayoutCoords
-                        if (pill != null && pill.isAttached) {
-                            // down.position is in the coordinator Box's local space.
-                            // Since that Box fills the screen from (0,0), it matches
-                            // window coordinates closely enough for hit-testing.
-                            val localPos = pill.windowToLocal(down.position)
-                            val inPill   = localPos.x >= 0f && localPos.y >= 0f &&
-                                           localPos.x <= pill.size.width.toFloat() &&
-                                           localPos.y <= pill.size.height.toFloat()
-                            if (inPill) return@awaitEachGesture
+        // ── Left vault drawer ─────────────────────────────────────────────────
+        ModalNavigationDrawer(
+            drawerState     = leftDrawerState,
+            gesturesEnabled = false, // We handle swipe gestures manually below
+            drawerContent   = {
+                CompositionLocalProvider(LocalOneShotBitmap provides leftOneShotBitmap) {
+                    ModalDrawerSheet(
+                        drawerContainerColor = Color.Transparent,
+                        modifier = Modifier
+                            .width(300.dp)
+                            .frostedPanel(LocalHazeState.current)
+                    ) {
+                        Spacer(Modifier.height(12.dp))
+                        PrimaryTabRow(selectedTabIndex = leftPanelTab) {
+                            Tab(
+                                selected = leftPanelTab == 0,
+                                onClick  = { leftPanelTab = 0 },
+                                text     = { Text("Files", fontWeight = FontWeight.Bold) }
+                            )
+                            Tab(
+                                selected = leftPanelTab == 1,
+                                onClick  = { leftPanelTab = 1 },
+                                text     = { Text("World", fontWeight = FontWeight.Bold) }
+                            )
                         }
-                        // ── end Gap-1 fix ─────────────────────────────────────────────────
 
-                        val vt   = VelocityTracker()
-                        vt.addPosition(down.uptimeMillis, down.position)
-                        var totalX = 0f
-                        var totalY = 0f
-                        var dir    = UNDECIDED
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            FilterChip(
+                                selected = leftDrawerMode == "Current",
+                                onClick  = { leftDrawerMode = "Current" },
+                                label    = { Text("Current Book", fontSize = 12.sp) }
+                            )
+                            FilterChip(
+                                selected = leftDrawerMode == "Books",
+                                onClick  = { leftDrawerMode = "Books" },
+                                label    = { Text("All Books", fontSize = 12.sp) }
+                            )
+                        }
 
-                        // Phase 2 — track MOVE until finger lifts
-                        while (true) {
-                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                            val p = event.changes.find { it.id == down.id } ?: break
-                            if (!p.pressed) break   // Rule 5: wait for actual UP
+                        HorizontalDivider(Modifier.padding(bottom = 4.dp))
 
-                            val delta = p.position - p.previousPosition
-                            totalX += delta.x
-                            totalY += delta.y
-                            vt.addPosition(p.uptimeMillis, p.position)
+                        val displayNotes   = if (leftDrawerMode == "Current") currentBookNotes else allNotes
+                        val displayFolders = if (leftDrawerMode == "Current") currentBookFolders else allFolders
 
-                            // Rule 6: commit direction once, never change it
-                            if (dir == UNDECIDED) {
-                                val ax = abs(totalX)
-                                val ay = abs(totalY)
-                                if (ax > slop || ay > slop) {
-                                    // 1.5× bias: clear diagonal scrolls stay with Sora
-                                    dir = if (ax >= ay * 1.5f) HORIZ else VERT
+                        val folderGrouped = remember(displayNotes, displayFolders) {
+                            buildMap<String, MutableList<Note>> {
+                                displayNotes.forEach { n ->
+                                    getOrPut(n.folderPath.ifBlank { "/" }) { mutableListOf() }.add(n)
                                 }
                             }
+                        }
 
-                            // Rule 1: VERT → don't consume; Sora gets everything.
-                            // Rule 2/3: HORIZ → consume so Sora doesn't also scroll,
-                            //           and mirror finger movement into the pager in real time.
-                            //
-                            // ── Gap-2 fix: real-time pager tracking ──────────────────────
-                            // scrollBy(-delta.x) maps finger movement directly to page position:
-                            //   finger moves LEFT  (delta.x < 0) → scrollBy(positive) → toward page 1
-                            //   finger moves RIGHT (delta.x > 0) → scrollBy(negative) → toward page 0
-                            // The pager clamps at its bounds, so over-scroll does nothing.
-                            // MutatePriority.UserInput ensures each new call cancels the
-                            // previous one instead of queuing, keeping tracking lag-free.
-                            if (dir == HORIZ) {
-                                p.consume()
-                                scope.launch {
-                                    pagerState.scroll(MutatePriority.UserInput) {
-                                        scrollBy(-delta.x)
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment     = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Notes",
+                                fontWeight = FontWeight.Bold,
+                                fontSize   = 13.sp,
+                                color      = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            IconButton(
+                                onClick  = { scope.launch { captureForDialog { showCreateNoteDialog = true } } },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = "New Note", modifier = Modifier.size(18.dp))
+                            }
+                        }
+
+                        LazyColumn(
+                            modifier       = Modifier.weight(1f),
+                            contentPadding = PaddingValues(bottom = 8.dp)
+                        ) {
+                            folderGrouped.forEach { (folderPath, notesInFolder) ->
+                                val isExpanded = expandedTreeState[folderPath] ?: true
+                                item(key = "f_$folderPath") {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .clickable { expandedTreeState[folderPath] = !isExpanded }
+                                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            if (isExpanded) Icons.Default.KeyboardArrowDown
+                                            else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp),
+                                            tint     = MaterialTheme.colorScheme.outline
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Icon(
+                                            if (isExpanded) Icons.Default.FolderOpen else Icons.Default.Folder,
+                                            contentDescription = null,
+                                            tint     = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            folderPath.substringAfterLast('/').ifEmpty { "Root" },
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize   = 13.sp,
+                                            modifier   = Modifier.weight(1f)
+                                        )
+                                        Text(
+                                            "${notesInFolder.size}",
+                                            fontSize = 11.sp,
+                                            color    = MaterialTheme.colorScheme.outline
+                                        )
                                     }
                                 }
-                            }
-                            // ── end Gap-2 fix ─────────────────────────────────────────────
-                        }
-
-                        // Rule 1 / Rule 5: if vertical or undecided, do nothing.
-                        if (dir != HORIZ) return@awaitEachGesture
-
-                        // Phase 3 — finger lifted after confirmed horizontal swipe.
-                        // The pager has already been tracking the finger live in Phase 2,
-                        // so pagerState.currentPage now reflects where the user released.
-                        //
-                        // ── Gap-3 fix: removed dead pagerState.currentPageOffsetFraction
-                        // condition (was always false because userScrollEnabled = false
-                        // means the fraction never changes away from 0).
-                        // Replaced with pagerState.currentPage which IS updated live
-                        // now that we drive the pager via scrollBy in Phase 2.
-                        val vel        = vt.calculateVelocity()
-                        val goingRight = totalX > 0f
-                        val minFling   = 400.dp.toPx() // px/s threshold
-
-                        if (goingRight) {
-                            // Rule 3: left-to-right.
-                            // If companion is visible, right-swipe closes it (back to editor).
-                            // Otherwise, open the left drawer.
-                            if (isCompanionOpen) {
-                                // vel.x > minFling = fast rightward velocity = close companion.
-                                // currentPage == 0 = pager already settled past the halfway point
-                                // toward the editor during live tracking = also close.
-                                val closeCompanion = vel.x > minFling || pagerState.currentPage == 0
-                                scope.launch { pagerState.animateScrollToPage(if (closeCompanion) 0 else 1) }
-                            } else {
-                                // Rule 3: open drawer
-                                scope.launch { drawerState.open() }
-                            }
-                        } else {
-                            // Rule 2: right-to-left.
-                            // If drawer is open, left-swipe closes it.
-                            // Otherwise, swipe to companion page.
-                            if (drawerState.isOpen) {
-                                scope.launch { drawerState.close() }
-                            } else {
-                                // vel.x < -minFling = fast leftward velocity = open companion.
-                                // currentPage == 1 = pager already settled past the halfway point
-                                // toward the companion during live tracking = also open.
-                                val openCompanion = vel.x < -minFling || pagerState.currentPage == 1
-                                scope.launch { pagerState.animateScrollToPage(if (openCompanion) 1 else 0) }
+                                if (isExpanded) {
+                                    items(notesInFolder, key = { "n_${it.id}" }) { note ->
+                                        val isActive = note.id == activeNote?.id
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(
+                                                    if (isActive) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                                                    else Color.Transparent
+                                                )
+                                                .clickable {
+                                                    editorVm.loadNote(note.id)
+                                                    scope.launch { leftDrawerState.close() }
+                                                }
+                                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.Description,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(14.dp),
+                                                tint     = if (isActive) MaterialTheme.colorScheme.primary
+                                                           else MaterialTheme.colorScheme.outline
+                                            )
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                note.name,
+                                                fontSize   = 14.sp,
+                                                fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                                                color      = if (isActive) MaterialTheme.colorScheme.primary
+                                                             else MaterialTheme.colorScheme.onSurface,
+                                                maxLines   = 1,
+                                                overflow   = TextOverflow.Ellipsis,
+                                                modifier   = Modifier.weight(1f)
+                                            )
+                                            Text(
+                                                "${note.wordCount}w",
+                                                fontSize = 11.sp,
+                                                color    = MaterialTheme.colorScheme.outline
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
-        )
+            }
+        ) {
+            // FIX: capture hazeState as non-null here; it's only nullable in the
+            // CompositionLocal but we know it is provided at this point in the tree.
+            val hazeState = LocalHazeState.current ?: dev.chrisbanes.haze.HazeState()
 
-        // ── HorizontalPager: page 0 = editor, page 1 = companion ─────────────
-        // userScrollEnabled = false because the gesture coordinator above
-        // drives page changes programmatically via pagerState. This prevents
-        // HorizontalPager from competing with Sora for touch events.
-        HorizontalPager(
-            state              = pagerState,
-            userScrollEnabled  = false,
-            modifier           = Modifier.fillMaxSize()
-        ) { page ->
-            when (page) {
-                0 -> {
-            // ── Main editor (page 0) ──────────────────────────────────────────
-            Scaffold(
+            HorizontalPager(
+                    state                   = rightPagerState,
+                    userScrollEnabled       = false, // We drive paging with our own gesture
+                    beyondViewportPageCount = 1,
+                    modifier                = Modifier
+                        .fillMaxSize()
+                        // ── Smart swipe handler ───────────────────────────────
+                        // Rules:
+                        //   Swipe left→right  → open left drawer (or close companion if open)
+                        //   Swipe right→left  → open right companion page
+                        //   Scroll up/down    → does NOT trigger either — editor scrolls freely
+                        //
+                        // How it works:
+                        //   We read events in the Initial pass (before any child sees them).
+                        //   We don't consume anything until we know the finger is going
+                        //   more horizontal than vertical (2:1 ratio).
+                        //   If vertical wins, we never consume, so the Sora editor below
+                        //   receives all events and scrolls normally.
+                        .pointerInput(leftDrawerState, rightPagerState, isCompanionOpen) {
+                            val slop     = viewConfiguration.touchSlop
+                            val minSwipe = 50.dp.toPx() // finger must travel at least 50 dp
+                            awaitEachGesture {
+                                // Track the very first finger down.
+                                // requireUnconsumed = false so we still see the event even
+                                // when the Sora editor consumed it first.
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                var totalX     = 0f
+                                var totalY     = 0f
+                                var locked     = false   // direction decided yet?
+                                var isHoriz    = false   // did horizontal win?
+                                while (true) {
+                                    // Initial pass = we see events BEFORE children do.
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    val p = event.changes.find { it.id == down.id } ?: break
+                                    if (!p.pressed) break          // finger lifted
+                                    val delta = p.positionChange()
+                                    totalX += delta.x
+                                    totalY += delta.y
+                                    // Wait until the finger moved past the touch-slop threshold
+                                    // before committing to a direction.
+                                    if (!locked) {
+                                        val ax = abs(totalX)
+                                        val ay = abs(totalY)
+                                        if (ax > slop || ay > slop) {
+                                            locked  = true
+                                            // Require 2× horizontal dominance so that
+                                            // even a slightly diagonal vertical scroll
+                                            // is treated as vertical and passes through.
+                                            isHoriz = ax >= ay * 2f
+                                        }
+                                    }
+                                    // Only consume once we know it's a horizontal swipe.
+                                    // Vertical swipes are never consumed here, so the
+                                    // Sora editor's AndroidView gets them normally.
+                                    if (locked && isHoriz) p.consume()
+                                }
+                                // Gesture ended — decide what to trigger.
+                                if (locked && isHoriz) when {
+                                    totalX >  minSwipe && !isCompanionOpen ->
+                                        scope.launch { leftDrawerState.open() }
+                                    totalX >  minSwipe &&  isCompanionOpen ->
+                                        scope.launch { rightPagerState.animateScrollToPage(0) }
+                                    totalX < -minSwipe ->
+                                        scope.launch { rightPagerState.animateScrollToPage(1) }
+                                }
+                            }
+                        },
+                ) { page ->
+                    when (page) {
+
+                        // ────────────────────────────────────────────────────
+                        // Page 0 — Main editor
+                        // ────────────────────────────────────────────────────
+                        0 -> {
+                            Scaffold(
                                 containerColor      = Color.Transparent,
                                 contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.ime),
                                 topBar = {
@@ -628,7 +583,7 @@ fun MainEditorScreen(
                                     Box {
                                         ScribeEditorTopBar(
                                             title          = activeNote?.name,
-                                            onNavClick     = { scope.launch { drawerState.open() } },
+                                            onNavClick     = { scope.launch { leftDrawerState.open() } },
                                             onTitleClick   = {
                                                 if (activeNote != null)
                                                     scope.launch { captureForDialog { showRenameDialog = true } }
@@ -636,7 +591,7 @@ fun MainEditorScreen(
                                             navigationIcon = Icons.Default.Menu,
                                             visible        = !zenMode,
                                             actions        = listOf(
-                                                ScribeBarAction(Icons.Default.Dock,        "Outline & Pinned Notes") { scope.launch { pagerState.animateScrollToPage(1) } },
+                                                ScribeBarAction(Icons.Default.Dock,        "Outline & Pinned Notes") { scope.launch { rightPagerState.animateScrollToPage(1) } },
                                                 ScribeBarAction(Icons.Default.Search,      "Find")                   { showFindBar = !showFindBar },
                                                 ScribeBarAction(Icons.Default.BookmarkAdd, "Save Checkpoint")        {
                                                     editorVm.saveManualSnapshot(soraEditorRef?.text?.toString() ?: "")
@@ -885,9 +840,6 @@ fun MainEditorScreen(
                                                             modifier       = Modifier
                                                                 .clip(CircleShape)
                                                                 .frostedFab(LocalHazeState.current)
-                                                                // Gap-1 fix: capture live bounds so the coordinator
-                                                                // can detect a DOWN on the pill and exit early.
-                                                                .onGloballyPositioned { pillLayoutCoords = it }
                                                                 .pointerInput(Unit) {
                                                                     detectDragGestures { change, dragAmount ->
                                                                         change.consume()
@@ -929,50 +881,52 @@ fun MainEditorScreen(
                                         } // end editor Box
                                     }
                                 }
-                            } // end Scaffold content lambda
-                } // end page 0 (editor)
+                            }
+                        }
 
-                1 -> {
-                    // ── Companion panel (page 1) ──────────────────────────────
-                    RightCompanionPanel(
-                        rightPanelTab         = rightPanelTab,
-                        onTabChange           = { tab: Int -> rightPanelTab = tab },
-                        pinnedTopNotes        = pinnedTopNotes,
-                        pinnedTopIndex        = pinnedTopIndex,
-                        pinnedBottomNotes     = pinnedBottomNotes,
-                        pinnedBottomIndex     = pinnedBottomIndex,
-                        allNotes              = allNotes,
-                        worldEntries          = worldEntries,
-                        outline               = outline,
-                        activeTheme           = activeTheme,
-                        soraEditorRef         = soraEditorRef,
-                        tabBarAtBottom        = companionTabBarBottom,
-                        splitHorizontal       = companionSplitHorizontal,
-                        onToggleTabBarPos     = { editorVm.setCompanionTabBarBottom(!companionTabBarBottom) },
-                        onToggleSplitLayout   = { editorVm.setCompanionSplitHorizontal(!companionSplitHorizontal) },
-                        onSwapSlots           = { editorVm.swapPinnedSlots() },
-                        onPrevTop             = { editorVm.prevPinnedTop() },
-                        onNextTop             = { editorVm.nextPinnedTop() },
-                        onSwitchTop           = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
-                        onEditTop             = { id: String -> editorVm.loadNote(id) },
-                        onRemoveTop           = { id: String -> editorVm.removePinnedTop(id) },
-                        onPrevBottom          = { editorVm.prevPinnedBottom() },
-                        onNextBottom          = { editorVm.nextPinnedBottom() },
-                        onSwitchBottom        = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
-                        onEditBottom          = { id: String -> editorVm.loadNote(id) },
-                        onRemoveBottom        = { id: String -> editorVm.removePinnedBottom(id) },
-                        onPickTop             = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
-                        onPickBottom          = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
-                        onClose               = { scope.launch { pagerState.animateScrollToPage(0) } },
-                        barBlurBitmap         = barBlurBitmap,
-                        hazeState             = hazeState,
-                    )
-                } // end page 1 (companion)
-            } // end when (page)
-        } // end HorizontalPager
+                        // ────────────────────────────────────────────────────
+                        // Page 1 — Right companion panel
+                        // ────────────────────────────────────────────────────
+                        1 -> {
+                            RightCompanionPanel(
+                                rightPanelTab         = rightPanelTab,
+                                onTabChange           = { rightPanelTab = it },
+                                pinnedTopNotes        = pinnedTopNotes,
+                                pinnedTopIndex        = pinnedTopIndex,
+                                pinnedBottomNotes     = pinnedBottomNotes,
+                                pinnedBottomIndex     = pinnedBottomIndex,
+                                allNotes              = allNotes,
+                                worldEntries          = worldEntries,
+                                outline               = outline,
+                                activeTheme           = activeTheme,
+                                soraEditorRef         = soraEditorRef,
+                                tabBarAtBottom        = companionTabBarBottom,
+                                splitHorizontal       = companionSplitHorizontal,
+                                onToggleTabBarPos     = { editorVm.setCompanionTabBarBottom(!companionTabBarBottom) },
+                                onToggleSplitLayout   = { editorVm.setCompanionSplitHorizontal(!companionSplitHorizontal) },
+                                onSwapSlots           = { editorVm.swapPinnedSlots() },
+                                onPrevTop             = { editorVm.prevPinnedTop() },
+                                onNextTop             = { editorVm.nextPinnedTop() },
+                                onSwitchTop           = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
+                                onEditTop             = { id -> editorVm.loadNote(id) },
+                                onRemoveTop           = { id -> editorVm.removePinnedTop(id) },
+                                onPrevBottom          = { editorVm.prevPinnedBottom() },
+                                onNextBottom          = { editorVm.nextPinnedBottom() },
+                                onSwitchBottom        = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
+                                onEditBottom          = { id -> editorVm.loadNote(id) },
+                                onRemoveBottom        = { id -> editorVm.removePinnedBottom(id) },
+                                onPickTop             = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
+                                onPickBottom          = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
+                                onClose               = { scope.launch { rightPagerState.animateScrollToPage(0) } },
+                                barBlurBitmap         = barBlurBitmap,
+                                hazeState             = hazeState,
+                            )
+                        }
+                    }
+                }
+        }
 
-        // ── Floating Windows Overlay ────────────────────────────────────────── 
-        // (still inside the outer Box, overlays both pager pages)
+        // ── Floating Windows Overlay ──────────────────────────────────────────
         val mappedNotes = remember(currentBookNotes, worldEntries) {
             buildList {
                 addAll(currentBookNotes)
@@ -1051,7 +1005,7 @@ fun MainEditorScreen(
                 FileExplorerOverlayDialog(
                     allNotes     = if (leftDrawerMode == "Current") currentBookNotes else allNotes,
                     allFolders   = if (leftDrawerMode == "Current") currentBookFolders else allFolders,
-                    onSelectNote = { note: Note ->
+                    onSelectNote = { note ->
                         if (targetSlot == "top") editorVm.addPinnedTop(note.id)
                         else editorVm.addPinnedBottom(note.id)
                         filePickerTargetSlot = null
@@ -1060,7 +1014,7 @@ fun MainEditorScreen(
                 )
             }
         }
-    } // end ModalNavigationDrawer content lambda
+    } // end outer Box
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1231,7 +1185,7 @@ private fun RightCompanionPanel(
                                         // ── Drag-resizable divider ────────────
                                         SplitDivider(
                                             isHorizontal  = true,
-                                            onDrag        = { delta: Float ->
+                                            onDrag        = { delta ->
                                                 splitFraction = (splitFraction + delta / totalPxFloat)
                                                     .coerceIn(0.2f, 0.8f)
                                             },
@@ -1287,7 +1241,7 @@ private fun RightCompanionPanel(
                                         // ── Drag-resizable divider ────────────
                                         SplitDivider(
                                             isHorizontal  = false,
-                                            onDrag        = { delta: Float ->
+                                            onDrag        = { delta ->
                                                 splitFraction = (splitFraction + delta / totalPxFloat)
                                                     .coerceIn(0.2f, 0.8f)
                                             },
