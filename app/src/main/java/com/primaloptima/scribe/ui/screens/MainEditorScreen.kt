@@ -70,12 +70,10 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.wrapContentWidth
 import coil3.compose.AsyncImage
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -311,8 +309,8 @@ fun MainEditorScreen(
         // ── 3-page HorizontalPager ────────────────────────────────────────────
         // Page 0 snaps at exactly 300 dp (drawer width) so the editor is always
         // visible on the right.  PageSize.Fixed(300.dp) tells the pager each
-        // page slot is 300 dp wide; pages 1 and 2 use wrapContentWidth(unbounded)
-        // + explicit fillMaxSize so they bleed to full screen width.
+        // page slot is 300 dp wide; pages 1 and 2 use requiredWidth(screenWidthDp)
+        // to bleed past that constraint and fill the full screen.
         //
         // The outer pointerInput intercepts swipe gestures and only forwards
         // them to the pager when:
@@ -515,15 +513,13 @@ fun MainEditorScreen(
 
                 // ── Page 1: Main editor ───────────────────────────────────────
                 // The page slot is 300 dp (PageSize.Fixed), but the editor must
-                // fill the full screen.  wrapContentWidth(unbounded = true) lets
-                // this Box exceed the slot width; we then hard-set it to
-                // screenWidthDp so it always fills the display.
+                // fill the full screen.  requiredWidth(screenWidthDp) ignores the
+                // parent's 300 dp constraint and sizes to the real screen width.
                 1 -> {
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .wrapContentWidth(unbounded = true)
-                    .width(screenWidthDp)
+                    .requiredWidth(screenWidthDp)
             ) {
             // ── Main editor ───────────────────────────────────────────────────
             Scaffold(
@@ -842,8 +838,7 @@ fun MainEditorScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxHeight()
-                            .wrapContentWidth(unbounded = true)
-                            .width(screenWidthDp)
+                            .requiredWidth(screenWidthDp)
                     ) {
                     RightCompanionPanel(
                         rightPanelTab         = rightPanelTab,
