@@ -307,19 +307,14 @@ fun MainEditorScreen(
         }
 
         // ── 3-page HorizontalPager ────────────────────────────────────────────
-        // Page 0 snaps at exactly 300 dp (drawer width) so the editor is always
-        // visible on the right.  PageSize.Fixed(300.dp) tells the pager each
-        // page slot is 300 dp wide; pages 1 and 2 use requiredWidth(screenWidthDp)
-        // to bleed past that constraint and fill the full screen.
+        // PageSize.Fill — every page slot is full screen width. Page 0's Box is
+        // constrained to width(300.dp) and its background is transparent, so the
+        // editor (page 1) shows through on the right as a natural peek.
+        // Snapping to page 0 lands at offset 0, which is correct.
         //
-        // The outer pointerInput intercepts swipe gestures and only forwards
-        // them to the pager when:
-        //   (a) horizontal component is ≥ 70 % of total movement, AND
-        //   (b) a vertical scroll hasn't already claimed the gesture.
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val screenWidthDp = maxWidth   // Dp snapshot captured once in composition
-
-            HorizontalPager(
+        // The pointerInput intercepts swipe gestures and only forwards them to
+        // the pager when horizontal is ≥ 70 % dominant AND vertical isn't busy.
+        HorizontalPager(
                 state                   = pagerState,
                 modifier                = Modifier
                     .fillMaxSize()
@@ -387,15 +382,14 @@ fun MainEditorScreen(
                     },
                 beyondViewportPageCount = 1,
                 userScrollEnabled       = !isKeyboardVisible,
-                pageSize                = PageSize.Fixed(300.dp),
+                pageSize                = PageSize.Fill,
                 key                     = { it }
             ) { page ->
             when (page) {
 
                 // ── Page 0: Left drawer ───────────────────────────────────────
-                // Page slot is 300 dp (matches PageSize.Fixed above), so the
-                // pager snaps with the drawer occupying exactly 300 dp and the
-                // editor peeking on the right.
+                // Full-width slot; only the inner Box is 300 dp wide. The rest of
+                // the slot is transparent so the editor peeks through on the right.
                 0 -> {
                     CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
                         Box(
@@ -512,15 +506,7 @@ fun MainEditorScreen(
                 }
 
                 // ── Page 1: Main editor ───────────────────────────────────────
-                // The page slot is 300 dp (PageSize.Fixed), but the editor must
-                // fill the full screen.  requiredWidth(screenWidthDp) ignores the
-                // parent's 300 dp constraint and sizes to the real screen width.
                 1 -> {
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .requiredWidth(screenWidthDp)
-            ) {
             // ── Main editor ───────────────────────────────────────────────────
             Scaffold(
                                 containerColor      = Color.Transparent,
@@ -829,17 +815,10 @@ fun MainEditorScreen(
                                     }
                                 }
                             } // end Scaffold content lambda
-            } // end full-screen Box for page 1
                 } // end page 1
 
                 // ── Page 2: Right companion panel ─────────────────────────────
-                // Same trick as page 1 — bleed past the 300 dp slot to full width.
                 else -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .requiredWidth(screenWidthDp)
-                    ) {
                     RightCompanionPanel(
                         rightPanelTab         = rightPanelTab,
                         onTabChange           = { rightPanelTab = it },
@@ -873,12 +852,10 @@ fun MainEditorScreen(
                         barBlurBitmap         = barBlurBitmap,
                         hazeState             = hazeState,
                     )
-                    } // end full-screen Box for page 2
                 } // end page 2
 
             } // end when(page)
         } // end HorizontalPager
-        } // end BoxWithConstraints
 
         // ── Floating Windows Overlay ──────────────────────────────────────────
         val mappedNotes = remember(currentBookNotes, worldEntries) {
