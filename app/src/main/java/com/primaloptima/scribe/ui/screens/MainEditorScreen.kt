@@ -312,8 +312,8 @@ fun MainEditorScreen(
 
         // ── 3-page HorizontalPager ────────────────────────────────────────────
         // Page 0 snaps at exactly 300dp so the editor is visible behind it.
-        // Pages 1 and 2 snap to full-screen. beyondViewportPageCount=1 keeps
-        // all pages composed so Sora editor state is never torn down.
+        // Pages 1 and 2 snap to full-screen. beyondViewportPageCount=2 keeps
+        // all 3 pages composed so Sora editor state is never torn down.
         //
         // The nestedScroll connection gates horizontal pager drags:
         //   - Only lets the pager consume X if |dx| ≥ 70% of total gesture magnitude
@@ -369,14 +369,21 @@ fun MainEditorScreen(
         val peekPadding   = (screenWidthDp - 300.dp).coerceAtLeast(0.dp)
 
         // drawerFraction: 1.0 = fully showing drawer, 0.0 = fully on editor/companion
-        val offsetFraction  = pagerState.currentPageOffsetFraction
-        val drawerFraction  = when (pagerState.currentPage) {
-            0    -> 1f - (kotlin.math.abs(offsetFraction) * 2f)  // settling on drawer → 1.0
-            1    -> kotlin.math.abs(offsetFraction) * 2f          // swiping toward drawer → grows
-            else -> 0f                                            // page 2: no peek
-        }.coerceIn(0f, 1f)
-
-        val endPadding = peekPadding * drawerFraction
+        // Wrapped in derivedStateOf so pagerState.currentPageOffsetFraction is read inside
+        // a derived computation, not in the composition scope of MainEditorScreen. Without
+        // this, every drag pixel invalidates the whole screen and re-runs the Sora AndroidView
+        // update lambda, causing the editor text to flash on every frame.
+        val endPadding by remember {
+            derivedStateOf {
+                val off  = pagerState.currentPageOffsetFraction
+                val frac = when (pagerState.currentPage) {
+                    0    -> 1f - (kotlin.math.abs(off) * 2f)  // settling on drawer → 1.0
+                    1    -> kotlin.math.abs(off) * 2f          // swiping toward drawer → grows
+                    else -> 0f                                 // page 2: no peek
+                }.coerceIn(0f, 1f)
+                peekPadding * frac
+            }
+        }
 
         HorizontalPager(
             state                   = pagerState,
@@ -384,7 +391,7 @@ fun MainEditorScreen(
                 .fillMaxSize()
                 .then(gestureResetModifier)
                 .nestedScroll(pagerGestureGuard),
-            beyondViewportPageCount = 1,
+            beyondViewportPageCount = 2,
             userScrollEnabled       = !isKeyboardVisible,
             pageSize                = PageSize.Fill,
             contentPadding          = PaddingValues(end = endPadding),
@@ -399,6 +406,7 @@ fun MainEditorScreen(
                             modifier = Modifier
                                 .fillMaxHeight()
                                 .width(300.dp)
+                                .consumeWindowInsets(WindowInsets.statusBars)
                         ) {
                             ModalDrawerSheet(
                                 drawerContainerColor = Color.Transparent,
@@ -513,7 +521,7 @@ fun MainEditorScreen(
             // ── Main editor ───────────────────────────────────────────────────
             Scaffold(
                                 containerColor      = Color.Transparent,
-                                contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.ime),
+                                contentWindowInsets = ScaffoldDefaults.contentWindowInsets,
                                 topBar = {
                                     var showMenu by remember { mutableStateOf(false) }
                                     Box {
