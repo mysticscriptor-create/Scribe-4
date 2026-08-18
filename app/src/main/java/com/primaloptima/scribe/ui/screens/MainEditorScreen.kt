@@ -77,6 +77,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -358,23 +359,24 @@ fun MainEditorScreen(
             }
         }
 
-        // Custom PageSize: page 0 = 300dp, pages 1 & 2 = full screen.
-        // The override uses `with(this)` because PageSize.calculateMainAxisPageSize
-        // is declared as a Density extension function — the receiver must be explicit.
-        // pagerState is read directly (not captured in remember) so it stays reactive.
-        val drawerPageSize = object : PageSize {
-            override fun Density.calculateMainAxisPageSize(
-                availableSpace: Int,
-                pageSpacing: Int
-            ): Int {
-                val dp300 = with(this) { 300.dp.roundToPx() }
-                return when {
-                    pagerState.currentPage == 0 -> dp300
-                    pagerState.targetPage == 0  -> dp300
-                    else                        -> availableSpace
-                }
-            }
-        }
+        // ── Drawer peek via contentPadding (interpolated) ─────────────────────
+        // PageSize.Fill keeps snap physics uniform (all pages the same size).
+        // The end padding shrinks page 0's slot to ~300dp so the editor peeks
+        // through on the right. The fraction is derived from currentPageOffsetFraction
+        // so the padding animates continuously with the user's finger — no mid-swipe
+        // layout jump. When settled on pages 1 or 2, endPadding is 0dp.
+        val screenWidthDp = LocalConfiguration.current.screenWidthDp.dp
+        val peekPadding   = (screenWidthDp - 300.dp).coerceAtLeast(0.dp)
+
+        // drawerFraction: 1.0 = fully showing drawer, 0.0 = fully on editor/companion
+        val offsetFraction  = pagerState.currentPageOffsetFraction
+        val drawerFraction  = when (pagerState.currentPage) {
+            0    -> 1f - (kotlin.math.abs(offsetFraction) * 2f)  // settling on drawer → 1.0
+            1    -> kotlin.math.abs(offsetFraction) * 2f          // swiping toward drawer → grows
+            else -> 0f                                            // page 2: no peek
+        }.coerceIn(0f, 1f)
+
+        val endPadding = peekPadding * drawerFraction
 
         HorizontalPager(
             state                   = pagerState,
@@ -384,7 +386,8 @@ fun MainEditorScreen(
                 .nestedScroll(pagerGestureGuard),
             beyondViewportPageCount = 1,
             userScrollEnabled       = !isKeyboardVisible,
-            pageSize                = drawerPageSize,
+            pageSize                = PageSize.Fill,
+            contentPadding          = PaddingValues(end = endPadding),
             key                     = { it }
         ) { page ->
             when (page) {
