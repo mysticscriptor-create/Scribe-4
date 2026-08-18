@@ -96,6 +96,10 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.ui.zIndex
+import androidx.compose.foundation.MutatePriority
+import androidx.compose.foundation.gestures.scroll
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 // ── Sora Editor imports ───────────────────────────────────────────────────────
 import androidx.compose.ui.viewinterop.AndroidView
 import io.github.rosemoe.sora.widget.CodeEditor
@@ -240,9 +244,12 @@ fun MainEditorScreen(
     var loadedNoteId   by rememberSaveable { mutableStateOf<String?>(null) }
     val expandedTreeState = remember { mutableStateMapOf<String, Boolean>() }
 
-    var pillMode     by remember { mutableIntStateOf(0) }
-    var pillOffsetX  by remember { mutableFloatStateOf(0f) }
-    var pillOffsetY  by remember { mutableFloatStateOf(0f) }
+    var pillMode         by remember { mutableIntStateOf(0) }
+    var pillOffsetX      by remember { mutableFloatStateOf(0f) }
+    var pillOffsetY      by remember { mutableFloatStateOf(0f) }
+    // Gap-1 fix: stores the pill's live layout bounds so the gesture coordinator
+    // can detect when a DOWN event lands on the pill and skip gesture detection.
+    var pillLayoutCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
     var prevWordCount   by remember { mutableIntStateOf(wordCount) }
     var deltaText       by remember { mutableStateOf<String?>(null) }
@@ -486,6 +493,24 @@ fun MainEditorScreen(
                     awaitEachGesture {
                         // Phase 1 — record DOWN
                         val down = awaitFirstDown(requireUnconsumed = false)
+
+                        // ── Gap-1 fix: pill exclusion ─────────────────────────────────────
+                        // If the DOWN event landed on the pill, exit immediately.
+                        // This lets the pill's own drag handler run without the coordinator
+                        // consuming events or mistakenly triggering the drawer / pager.
+                        val pill = pillLayoutCoords
+                        if (pill != null && pill.isAttached) {
+                            // down.position is in the coordinator Box's local space.
+                            // Since that Box fills the screen from (0,0), it matches
+                            // window coordinates closely enough for hit-testing.
+                            val localPos = pill.windowToLocal(down.position)
+                            val inPill   = localPos.x >= 0f && localPos.y >= 0f &&
+                                           localPos.x <= pill.size.width.toFloat() &&
+                                           localPos.y <= pill.size.height.toFloat()
+                            if (inPill) return@awaitEachGesture
+                        }
+                        // ── end Gap-1 fix ─────────────────────────────────────────────────
+
                         val vt   = VelocityTracker()
                         vt.addPosition(down.uptimeMillis, down.position)
                         var totalX = 0f
@@ -514,15 +539,39 @@ fun MainEditorScreen(
                             }
 
                             // Rule 1: VERT → don't consume; Sora gets everything.
-                            // Rule 2/3: HORIZ → consume so Sora doesn't also scroll.
-                            if (dir == HORIZ) p.consume()
+                            // Rule 2/3: HORIZ → consume so Sora doesn't also scroll,
+                            //           and mirror finger movement into the pager in real time.
+                            //
+                            // ── Gap-2 fix: real-time pager tracking ──────────────────────
+                            // scrollBy(-delta.x) maps finger movement directly to page position:
+                            //   finger moves LEFT  (delta.x < 0) → scrollBy(positive) → toward page 1
+                            //   finger moves RIGHT (delta.x > 0) → scrollBy(negative) → toward page 0
+                            // The pager clamps at its bounds, so over-scroll does nothing.
+                            // MutatePriority.UserInput ensures each new call cancels the
+                            // previous one instead of queuing, keeping tracking lag-free.
+                            if (dir == HORIZ) {
+                                p.consume()
+                                scope.launch {
+                                    pagerState.scroll(MutatePriority.UserInput) {
+                                        scrollBy(-delta.x)
+                                    }
+                                }
+                            }
+                            // ── end Gap-2 fix ─────────────────────────────────────────────
                         }
 
                         // Rule 1 / Rule 5: if vertical or undecided, do nothing.
                         if (dir != HORIZ) return@awaitEachGesture
 
                         // Phase 3 — finger lifted after confirmed horizontal swipe.
-                        // Use velocity for a confident snap, position fraction as fallback.
+                        // The pager has already been tracking the finger live in Phase 2,
+                        // so pagerState.currentPage now reflects where the user released.
+                        //
+                        // ── Gap-3 fix: removed dead pagerState.currentPageOffsetFraction
+                        // condition (was always false because userScrollEnabled = false
+                        // means the fraction never changes away from 0).
+                        // Replaced with pagerState.currentPage which IS updated live
+                        // now that we drive the pager via scrollBy in Phase 2.
                         val vel        = vt.calculateVelocity()
                         val goingRight = totalX > 0f
                         val minFling   = 400.dp.toPx() // px/s threshold
@@ -532,10 +581,11 @@ fun MainEditorScreen(
                             // If companion is visible, right-swipe closes it (back to editor).
                             // Otherwise, open the left drawer.
                             if (isCompanionOpen) {
-                                // Only close companion if swipe is decisive; otherwise keep open
-                                val stayOpen = vel.x < -minFling ||
-                                    (vel.x < minFling && pagerState.currentPageOffsetFraction > 0.5f)
-                                scope.launch { pagerState.animateScrollToPage(if (stayOpen) 1 else 0) }
+                                // vel.x > minFling = fast rightward velocity = close companion.
+                                // currentPage == 0 = pager already settled past the halfway point
+                                // toward the editor during live tracking = also close.
+                                val closeCompanion = vel.x > minFling || pagerState.currentPage == 0
+                                scope.launch { pagerState.animateScrollToPage(if (closeCompanion) 0 else 1) }
                             } else {
                                 // Rule 3: open drawer
                                 scope.launch { drawerState.open() }
@@ -547,7 +597,11 @@ fun MainEditorScreen(
                             if (drawerState.isOpen) {
                                 scope.launch { drawerState.close() }
                             } else {
-                                scope.launch { pagerState.animateScrollToPage(1) }
+                                // vel.x < -minFling = fast leftward velocity = open companion.
+                                // currentPage == 1 = pager already settled past the halfway point
+                                // toward the companion during live tracking = also open.
+                                val openCompanion = vel.x < -minFling || pagerState.currentPage == 1
+                                scope.launch { pagerState.animateScrollToPage(if (openCompanion) 1 else 0) }
                             }
                         }
                     }
@@ -831,6 +885,9 @@ fun MainEditorScreen(
                                                             modifier       = Modifier
                                                                 .clip(CircleShape)
                                                                 .frostedFab(LocalHazeState.current)
+                                                                // Gap-1 fix: capture live bounds so the coordinator
+                                                                // can detect a DOWN on the pill and exit early.
+                                                                .onGloballyPositioned { pillLayoutCoords = it }
                                                                 .pointerInput(Unit) {
                                                                     detectDragGestures { change, dragAmount ->
                                                                         change.consume()
