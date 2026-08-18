@@ -97,7 +97,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
-import androidx.compose.ui.zIndex
+
 // ── Sora Editor imports ───────────────────────────────────────────────────────
 import androidx.compose.ui.viewinterop.AndroidView
 import io.github.rosemoe.sora.widget.CodeEditor
@@ -303,7 +303,85 @@ fun MainEditorScreen(
         BackHandler { scope.launch { leftDrawerOffset.animateTo(0f, panelSpring) } }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    // ── Gesture state machine ─────────────────────────────────────────────────
+    // Placed on the outer Box as a modifier — NOT as a separate child Box.
+    // A separate empty Box with zIndex(10f) + fillMaxSize() blocks ALL touches
+    // even when it doesn't consume them, because it sits above the content.
+    // By putting pointerInput directly on the wrapping Box, we observe events
+    // at PointerEventPass.Initial (before children see them) without adding any
+    // new hit-testable layer that could swallow taps.
+    //
+    // Only confirmed HORIZ events are consumed. VERT and UNDECIDED events are
+    // never consumed, so Sora Editor and all Compose children receive them
+    // exactly as if the coordinator weren't there.
+    val isKeyboardVisible = WindowInsets.isImeVisible
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(isKeyboardVisible) {
+                if (isKeyboardVisible) return@pointerInput
+                val slop     = viewConfiguration.touchSlop
+                val minFling = 500.dp.toPx()
+                val UNDECIDED = 0; val HORIZ = 1; val VERT = 2
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val vt   = VelocityTracker()
+                    vt.addPosition(down.uptimeMillis, down.position)
+                    var totalX = 0f; var totalY = 0f
+                    var dir    = UNDECIDED
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val p = event.changes.find { it.id == down.id } ?: break
+                        if (!p.pressed) break
+                        val delta = p.position - p.previousPosition
+                        totalX += delta.x; totalY += delta.y
+                        vt.addPosition(p.uptimeMillis, p.position)
+                        if (dir == UNDECIDED) {
+                            val ax = abs(totalX); val ay = abs(totalY)
+                            if (ax > slop || ay > slop) {
+                                // 1.5× bias: clearly diagonal scrolls stay with Sora
+                                dir = if (ax >= ay * 1.5f) HORIZ else VERT
+                            }
+                        }
+                        // ONLY consume when we have confirmed horizontal intent.
+                        // VERT and UNDECIDED pass through untouched — Sora, buttons,
+                        // and all other children receive those events normally.
+                        if (dir == HORIZ) p.consume()
+                    }
+                    if (dir != HORIZ) return@awaitEachGesture
+                    // ── Finger lifted after confirmed horizontal swipe ────────
+                    val vel        = vt.calculateVelocity()
+                    val goingRight = totalX > 0f
+                    val currentLeft  = leftDrawerOffset.value
+                    val currentRight = rightPanelOffset.value
+                    if (goingRight) {
+                        if (isCompanionOpen) {
+                            val open = if (vel.x > minFling) false
+                                       else if (vel.x < -minFling) true
+                                       else currentRight > 0.4f
+                            scope.launch { rightPanelOffset.animateTo(if (open) 1f else 0f, panelSpring) }
+                        } else {
+                            val open = if (vel.x > minFling) true
+                                       else if (vel.x < -minFling) false
+                                       else currentLeft > 0.4f
+                            scope.launch { leftDrawerOffset.animateTo(if (open) 1f else 0f, panelSpring) }
+                        }
+                    } else {
+                        if (leftDrawerOffset.value > 0f) {
+                            val open = if (vel.x < -minFling) false
+                                       else if (vel.x > minFling) true
+                                       else currentLeft > 0.4f
+                            scope.launch { leftDrawerOffset.animateTo(if (open) 1f else 0f, panelSpring) }
+                        } else {
+                            val open = if (vel.x < -minFling) true
+                                       else if (vel.x > minFling) false
+                                       else currentRight > 0.4f
+                            scope.launch { rightPanelOffset.animateTo(if (open) 1f else 0f, panelSpring) }
+                        }
+                    }
+                }
+            }
+    ) {
         // ── Editor-only background image ──────────────────────────────────────
         if (isEditorOnlyBg) {
             AsyncImage(
@@ -329,80 +407,6 @@ fun MainEditorScreen(
             )
             Box(Modifier.fillMaxSize().background(themeBgColor.copy(alpha = bgOpacity)))
         }
-
-        // ── Gesture state machine ─────────────────────────────────────────────
-        // Intercepts at Initial pass (before Sora sees events).
-        // Direction lock: only routes horizontally if |ΔX| >= |ΔY| * 2.
-        // Keyboard guard: if IME is visible, all touches pass through untouched.
-        val isKeyboardVisible = WindowInsets.isImeVisible
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .zIndex(10f)
-                .pointerInput(isKeyboardVisible) {
-                    if (isKeyboardVisible) return@pointerInput
-                    val slop    = viewConfiguration.touchSlop
-                    val minFling = 500.dp.toPx() // px/s threshold for velocity-fling
-                    // Gesture direction flags
-                    val UNDECIDED = 0; val HORIZ = 1; val VERT = 2
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        val vt   = VelocityTracker()
-                        vt.addPosition(down.uptimeMillis, down.position)
-                        var totalX = 0f; var totalY = 0f
-                        var dir = UNDECIDED
-                        while (true) {
-                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                            val p = event.changes.find { it.id == down.id } ?: break
-                            if (!p.pressed) break
-                            val delta = p.position - p.previousPosition
-                            totalX += delta.x; totalY += delta.y
-                            vt.addPosition(p.uptimeMillis, p.position)
-                            if (dir == UNDECIDED) {
-                                val ax = abs(totalX); val ay = abs(totalY)
-                                if (ax > slop || ay > slop) {
-                                    dir = if (ax >= ay * 2f) HORIZ else VERT
-                                }
-                            }
-                            // Consume only confirmed horizontal swipes
-                            if (dir == HORIZ) p.consume()
-                        }
-                        if (dir != HORIZ) return@awaitEachGesture
-                        // Finger up: decide open/close via velocity then position
-                        val vel = vt.calculateVelocity()
-                        val goingRight = totalX > 0f
-                        val currentLeft  = leftDrawerOffset.value
-                        val currentRight = rightPanelOffset.value
-                        if (goingRight) {
-                            // Right swipe: open drawer (or close companion if open)
-                            if (isCompanionOpen) {
-                                val open = if (vel.x > minFling) false
-                                           else if (vel.x < -minFling) true
-                                           else currentRight > 0.4f
-                                scope.launch { rightPanelOffset.animateTo(if (open) 1f else 0f, panelSpring) }
-                            } else {
-                                val open = if (vel.x > minFling) true
-                                           else if (vel.x < -minFling) false
-                                           else currentLeft > 0.4f
-                                scope.launch { leftDrawerOffset.animateTo(if (open) 1f else 0f, panelSpring) }
-                            }
-                        } else {
-                            // Left swipe: close drawer or open companion
-                            if (leftDrawerOffset.value > 0f) {
-                                val open = if (vel.x < -minFling) false
-                                           else if (vel.x > minFling) true
-                                           else currentLeft > 0.4f
-                                scope.launch { leftDrawerOffset.animateTo(if (open) 1f else 0f, panelSpring) }
-                            } else {
-                                val open = if (vel.x < -minFling) true
-                                           else if (vel.x > minFling) false
-                                           else currentRight > 0.4f
-                                scope.launch { rightPanelOffset.animateTo(if (open) 1f else 0f, panelSpring) }
-                            }
-                        }
-                    }
-                }
-        )
 
         // ── Derive pixel sizes for graphicsLayer offsets ──────────────────────
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
