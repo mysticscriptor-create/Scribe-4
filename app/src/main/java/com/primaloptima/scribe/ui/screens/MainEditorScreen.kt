@@ -45,6 +45,10 @@ import android.graphics.Bitmap
 import android.os.Build
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.splineBasedDecay
+import androidx.compose.foundation.gestures.animateTo
+import androidx.compose.foundation.gestures.snapTo
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.unit.Constraints
@@ -142,9 +146,10 @@ fun MainEditorScreen(
     val panelState = remember {
         AnchoredDraggableState(
             initialValue        = PanelState.Center,
-            positionalThreshold = { distance -> distance * 0.4f },
+            positionalThreshold = { distance: Float -> distance * 0.4f },
             velocityThreshold   = { with(localDensity) { 125.dp.toPx() } },
-            animationSpec       = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+            snapAnimationSpec   = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+            decayAnimationSpec  = splineBasedDecay(localDensity)
         )
     }
     val isLeftDrawerOpen = panelState.targetValue == PanelState.LeftOpen
