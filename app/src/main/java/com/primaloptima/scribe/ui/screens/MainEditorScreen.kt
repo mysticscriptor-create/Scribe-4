@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -343,30 +344,7 @@ fun MainEditorScreen(
         ) { if (it) 1f else 0f }
 
         Layout(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(isKeyboardVisible) {
-                    if (isKeyboardVisible) return@pointerInput
-                    // Detect horizontal swipe gestures on the layout to open/close panels.
-                    // We use detectHorizontalDragGestures which only fires for clear horizontal swipes.
-                    androidx.compose.foundation.gestures.detectHorizontalDragGestures(
-                        onHorizontalDrag = { change, dragAmount ->
-                            change.consume()
-                            if (!leftTransition.isRunning && !rightTransition.isRunning) {
-                                if (dragAmount > 20f && !isRightPanelOpen) {
-                                    // Swipe right → open left drawer (or close right panel)
-                                    if (isRightPanelOpen) isRightPanelOpen = false
-                                    else isLeftDrawerOpen = true
-                                } else if (dragAmount < -20f && !isLeftDrawerOpen) {
-                                    // Swipe left → open right panel (or close left drawer)
-                                    if (isLeftDrawerOpen) isLeftDrawerOpen = false
-                                    else isRightPanelOpen = true
-                                }
-                            }
-                        }
-                    )
-                },
-        ) {
+            content = {
                 // Child 0: Left drawer (300dp wide)
                 CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
                     Box(modifier = Modifier.fillMaxHeight().width(300.dp)) {
@@ -823,7 +801,31 @@ fun MainEditorScreen(
                     hazeState             = hazeState,
                 )
             } // end Layout content lambda
-        ) { measurables, constraints ->
+        },
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(isKeyboardVisible) {
+                    if (isKeyboardVisible) return@pointerInput
+                    // Detect horizontal swipe gestures on the layout to open/close panels.
+                    // We use detectHorizontalDragGestures which only fires for clear horizontal swipes.
+                    detectHorizontalDragGestures(
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            if (!leftTransition.isRunning && !rightTransition.isRunning) {
+                                if (dragAmount > 20f && !isRightPanelOpen) {
+                                    // Swipe right → open left drawer (or close right panel)
+                                    if (isRightPanelOpen) isRightPanelOpen = false
+                                    else isLeftDrawerOpen = true
+                                } else if (dragAmount < -20f && !isLeftDrawerOpen) {
+                                    // Swipe left → open right panel (or close left drawer)
+                                    if (isLeftDrawerOpen) isLeftDrawerOpen = false
+                                    else isRightPanelOpen = true
+                                }
+                            }
+                        }
+                    )
+                },
+            measurePolicy = { measurables, constraints ->
             // ── Measure all three children ────────────────────────────────────
             val drawerWidthPx = (300 * density).toInt()
             val screenWidth   = constraints.maxWidth
@@ -879,7 +881,7 @@ fun MainEditorScreen(
                 editorPlaceable.placeRelative(x = editorX, y = 0)
                 rightPlaceable.placeRelative(x = rightX,  y = 0)
             }
-        } // end Layout
+        }) // end Layout
 
         // ── Floating Windows Overlay ──────────────────────────────────────────
         val mappedNotes = remember(currentBookNotes, worldEntries) {
