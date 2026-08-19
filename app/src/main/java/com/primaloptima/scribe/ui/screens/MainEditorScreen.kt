@@ -344,7 +344,7 @@ fun MainEditorScreen(
         ) { if (it) 1f else 0f }
 
         Layout(
-            content = {
+            {
                 // Child 0: Left drawer (300dp wide)
                 CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
                     Box(modifier = Modifier.fillMaxHeight().width(300.dp)) {
@@ -809,7 +809,9 @@ fun MainEditorScreen(
                     detectHorizontalDragGestures(
                         onHorizontalDrag = { change, dragAmount ->
                             change.consume()
-                            if (!leftTransition.isRunning && !rightTransition.isRunning) {
+                            if ((leftFraction.value == 0f || leftFraction.value == 1f) &&
+                                (rightFraction.value == 0f || rightFraction.value == 1f)
+                            ) {
                                 if (dragAmount > 20f && !isRightPanelOpen) {
                                     if (isRightPanelOpen) isRightPanelOpen = false
                                     else isLeftDrawerOpen = true
@@ -821,11 +823,7 @@ fun MainEditorScreen(
                         }
                     )
                 },
-            measurePolicy = object : androidx.compose.ui.layout.MeasurePolicy {
-                override fun androidx.compose.ui.layout.MeasureScope.measure(
-                    measurables: List<androidx.compose.ui.layout.Measurable>,
-                    constraints: Constraints
-                ): androidx.compose.ui.layout.MeasureResult {
+            measurePolicy = { measurables, constraints ->
                     // ── Measure all three children ────────────────────────────────────
                     val drawerWidthPx = (300 * density).toInt()
                     val screenWidth   = constraints.maxWidth
@@ -844,7 +842,7 @@ fun MainEditorScreen(
                         Constraints.fixed(screenWidth, screenHeight)
                     )
 
-                    return layout(screenWidth, screenHeight) {
+                    layout(screenWidth, screenHeight) {
                         // ── Left drawer position ──────────────────────────────────────
                         val drawerX = lerp(
                             -drawerWidthPx.toFloat(),
@@ -874,7 +872,6 @@ fun MainEditorScreen(
                         editorPlaceable.placeRelative(x = editorX, y = 0)
                         rightPlaceable.placeRelative(x = rightX,  y = 0)
                     }
-                }
             }
         ) // end Layout
 
