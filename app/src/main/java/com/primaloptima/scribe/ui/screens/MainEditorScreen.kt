@@ -44,6 +44,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.updateTransition
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.MeasurePolicy
+import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.util.lerp
 import com.primaloptima.scribe.ui.theme.LocalBarBlurBitmap
@@ -344,7 +346,7 @@ fun MainEditorScreen(
         ) { if (it) 1f else 0f }
 
         Layout(
-            {
+            content = {
                 // Child 0: Left drawer (300dp wide)
                 CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
                     Box(modifier = Modifier.fillMaxHeight().width(300.dp)) {
@@ -823,7 +825,11 @@ fun MainEditorScreen(
                         }
                     )
                 },
-            measurePolicy = { measurables, constraints ->
+            measurePolicy = object : MeasurePolicy {
+                override fun MeasureScope.measure(
+                    measurables: List<androidx.compose.ui.layout.Measurable>,
+                    constraints: Constraints
+                ): androidx.compose.ui.layout.MeasureResult {
                     // ── Measure all three children ────────────────────────────────────
                     val drawerWidthPx = (300 * density).toInt()
                     val screenWidth   = constraints.maxWidth
@@ -842,7 +848,7 @@ fun MainEditorScreen(
                         Constraints.fixed(screenWidth, screenHeight)
                     )
 
-                    layout(screenWidth, screenHeight) {
+                    return layout(screenWidth, screenHeight) {
                         // ── Left drawer position ──────────────────────────────────────
                         val drawerX = lerp(
                             -drawerWidthPx.toFloat(),
@@ -872,6 +878,7 @@ fun MainEditorScreen(
                         editorPlaceable.placeRelative(x = editorX, y = 0)
                         rightPlaceable.placeRelative(x = rightX,  y = 0)
                     }
+                }
             }
         ) // end Layout
 
