@@ -349,21 +349,24 @@ fun MainEditorScreen(
                     if (isKeyboardVisible) return@pointerInput
                     // Detect horizontal swipe gestures on the layout to open/close panels.
                     // We use detectHorizontalDragGestures which only fires for clear horizontal swipes.
-                    androidx.compose.foundation.gestures.detectHorizontalDragGestures { _, dragAmount ->
-                        if (!leftTransition.isRunning && !rightTransition.isRunning) {
-                            if (dragAmount > 20f && !isRightPanelOpen) {
-                                // Swipe right → open left drawer (or close right panel)
-                                if (isRightPanelOpen) isRightPanelOpen = false
-                                else isLeftDrawerOpen = true
-                            } else if (dragAmount < -20f && !isLeftDrawerOpen) {
-                                // Swipe left → open right panel (or close left drawer)
-                                if (isLeftDrawerOpen) isLeftDrawerOpen = false
-                                else isRightPanelOpen = true
+                    androidx.compose.foundation.gestures.detectHorizontalDragGestures(
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            if (!leftTransition.isRunning && !rightTransition.isRunning) {
+                                if (dragAmount > 20f && !isRightPanelOpen) {
+                                    // Swipe right → open left drawer (or close right panel)
+                                    if (isRightPanelOpen) isRightPanelOpen = false
+                                    else isLeftDrawerOpen = true
+                                } else if (dragAmount < -20f && !isLeftDrawerOpen) {
+                                    // Swipe left → open right panel (or close left drawer)
+                                    if (isLeftDrawerOpen) isLeftDrawerOpen = false
+                                    else isRightPanelOpen = true
+                                }
                             }
                         }
-                    }
+                    )
                 },
-            content = {
+        ) {
                 // Child 0: Left drawer (300dp wide)
                 CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
                     Box(modifier = Modifier.fillMaxHeight().width(300.dp)) {
