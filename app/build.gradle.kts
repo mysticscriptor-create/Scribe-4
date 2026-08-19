@@ -115,7 +115,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
     // Core AndroidX
-    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.appcompat:appcompat:1.8.0")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.activity:activity-ktx:1.13.0")
 
@@ -130,7 +130,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
     // Material Design 3
-    implementation("com.google.android.material:material:1.12.0")
+    implementation("com.google.android.material:material:1.14.0")
 
     // ViewModel + LiveData + coroutines
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0")

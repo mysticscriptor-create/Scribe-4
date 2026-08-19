@@ -345,7 +345,7 @@ fun MainEditorScreen(
                 userScrollEnabled    = !isKeyboardVisible && !isDrawerOpen,
                 modifier             = Modifier
                     .fillMaxSize()
-                    .pointerInput(isEditorBusy, isDrawerOpen) {
+                    .pointerInput(isEditorBusy) {
                         // Gesture coordinator — 6 rules:
                         // R1: vertical dominant → pass through to Sora
                         // R2: right-to-left on editor → pager to companion
@@ -353,6 +353,14 @@ fun MainEditorScreen(
                         // R4: isEditorBusy → block all horizontal
                         // R5: direction held until finger lifts
                         // R6: 1.5× bias commits dominant axis once
+                        //
+                        // Bug fixes:
+                        // - isDrawerOpen removed from key so gesture isn't cancelled
+                        //   mid-swipe when drawer crosses the open threshold (fixes
+                        //   drawer not closing on right-to-left swipe).
+                        // - Page guard: drawer gestures only active on page 0; on
+                        //   page 1 a right-swipe should navigate back, not open drawer.
+                        // - Spring uses NoBouncy so it never overshoots 0f and flashes.
                         if (isEditorBusy) return@pointerInput
 
                         awaitEachGesture {
@@ -360,6 +368,11 @@ fun MainEditorScreen(
                             var totalX = 0f; var totalY = 0f
                             val UNDECIDED = 0; val HORIZ = 1; val VERT = 2
                             var dir = UNDECIDED
+
+                            // Snapshot page and drawer state at gesture start so they
+                            // don't shift under us mid-gesture (also avoids the key restart).
+                            val startPage        = pagerState.currentPage
+                            val startDrawerOffset = drawerOffsetPx.value
 
                             while (true) {
                                 val event  = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
@@ -378,6 +391,10 @@ fun MainEditorScreen(
                                 }
 
                                 if (dir == HORIZ) {
+                                    // Bug 2 fix: on page 1, never intercept — let the
+                                    // pager handle right-swipe as a back navigation.
+                                    if (startPage != 0) continue
+
                                     val drawerActive = totalX > 0f || drawerOffsetPx.value > -drawerPx
                                     if (drawerActive) {
                                         // R3: opening/closing drawer — consume so pager doesn't also scroll
@@ -392,17 +409,22 @@ fun MainEditorScreen(
                             }
 
                             // Finger lifted — settle drawer only if it was moving
-                            val drawerMoved = dir == HORIZ &&
-                                (totalX > 0f || drawerOffsetPx.value > -drawerPx)
+                            // Bug 3 fix: use startDrawerOffset so a fast close swipe that
+                            // was already partially applied is always settled.
+                            val drawerMoved = dir == HORIZ && startPage == 0 &&
+                                (totalX > 0f || startDrawerOffset > -drawerPx)
                             if (drawerMoved) {
                                 val halfWay = -drawerPx / 2f
                                 val target  = if (drawerOffsetPx.value > halfWay) 0f else drawerHiddenPx
                                 scope.launch {
+                                    // Bug 1 fix: NoBouncy so the drawer never overshoots
+                                    // 0f (fully open) or drawerHiddenPx, which caused a
+                                    // brief flash of the drawer appearing then snapping back.
                                     drawerOffsetPx.animateTo(
                                         target,
                                         animationSpec = androidx.compose.animation.core.spring(
-                                            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
-                                            stiffness    = androidx.compose.animation.core.Spring.StiffnessMedium
+                                            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                                            stiffness    = androidx.compose.animation.core.Spring.StiffnessMediumLow
                                         )
                                     )
                                 }
@@ -1827,4 +1849,4 @@ private fun CodeEditor.insertAtCursor(str: String) {
 
 private fun parseComposeColor(hex: String, fallback: Color): Color = try {
     Color(android.graphics.Color.parseColor(hex))
-} catch (_: Exception) { fallbfallba
+} catch (_: Exception) { fallback }
