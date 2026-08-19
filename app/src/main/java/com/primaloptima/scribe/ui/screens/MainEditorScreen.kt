@@ -11,7 +11,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.AnchoredDraggableState
+import androidx.compose.foundation.gestures.DraggableAnchors
+import androidx.compose.foundation.gestures.anchoredDraggable
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -40,9 +43,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import android.graphics.Bitmap
 import android.os.Build
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.updateTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.unit.Constraints
@@ -63,6 +65,7 @@ import com.primaloptima.scribe.ui.theme.frostedCard
 import com.primaloptima.scribe.ui.theme.LocalAppTheme
 import com.primaloptima.scribe.ui.theme.ScribeColorScheme
 import com.primaloptima.scribe.util.BitmapBlur
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
@@ -110,6 +113,8 @@ import com.primaloptima.scribe.util.ScribeProseLanguage
 import com.primaloptima.scribe.util.ThemeManager
 
 
+private enum class PanelState { LeftOpen, Center, RightOpen }
+
 @OptIn(
     ExperimentalMaterial3Api::class,
     androidx.compose.foundation.ExperimentalFoundationApi::class,
@@ -132,9 +137,18 @@ fun MainEditorScreen(
     val context = LocalContext.current
     val scope   = rememberCoroutineScope()
 
-    // ── Panel open/close state ────────────────────────────────────────────────
-    var isLeftDrawerOpen  by remember { mutableStateOf(false) }
-    var isRightPanelOpen  by remember { mutableStateOf(false) }
+    // ── Panel gesture state ───────────────────────────────────────────────────
+    val localDensity = LocalDensity.current
+    val panelState = remember {
+        AnchoredDraggableState(
+            initialValue        = PanelState.Center,
+            positionalThreshold = { distance -> distance * 0.4f },
+            velocityThreshold   = { with(localDensity) { 125.dp.toPx() } },
+            animationSpec       = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+        )
+    }
+    val isLeftDrawerOpen = panelState.targetValue == PanelState.LeftOpen
+    val isRightPanelOpen = panelState.targetValue == PanelState.RightOpen
 
     // ── Frosted-glass blur bitmaps (pre-API-31 fallback) ─────────────────────
     val view         = LocalView.current
@@ -268,25 +282,10 @@ fun MainEditorScreen(
 
     // ── Back-press handlers ───────────────────────────────────────────────────
     if (isLeftDrawerOpen || isRightPanelOpen) {
-        BackHandler {
-            isLeftDrawerOpen = false
-            isRightPanelOpen = false
-        }
+        BackHandler { scope.launch { panelState.animateTo(PanelState.Center) } }
     }
 
-    // ── Panel animation fractions ─────────────────────────────────────────────
     val isKeyboardVisible = WindowInsets.isImeVisible
-
-    val leftTransition  = updateTransition(targetState = isLeftDrawerOpen,  label = "leftDrawer")
-    val rightTransition = updateTransition(targetState = isRightPanelOpen,  label = "rightPanel")
-
-    val leftFraction  by leftTransition.animateFloat(
-        transitionSpec = { tween(durationMillis = 350) }, label = "leftFraction"
-    ) { if (it) 1f else 0f }
-
-    val rightFraction by rightTransition.animateFloat(
-        transitionSpec = { tween(durationMillis = 350) }, label = "rightFraction"
-    ) { if (it) 1f else 0f }
 
     Box(modifier = Modifier.fillMaxSize()) {
         val hazeState = LocalHazeState.current ?: dev.chrisbanes.haze.HazeState()
@@ -319,7 +318,7 @@ fun MainEditorScreen(
 
         // ── Custom push-drawer Layout ─────────────────────────────────────────
         // Three children: left drawer (300dp), editor (full), right panel (full).
-        // leftFraction / rightFraction animate 0→1 as panels open.
+        // panelState.offset drives all positions: +drawerW=LeftOpen, 0=Center, -screenW=RightOpen.
         Layout(
             content = {
                 // Child 0: Left drawer (300dp wide)
@@ -407,7 +406,7 @@ fun MainEditorScreen(
                                                     .background(if (isActive) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else Color.Transparent)
                                                     .clickable {
                                                         editorVm.loadNote(note.id)
-                                                        isLeftDrawerOpen = false
+                                                        scope.launch { panelState.animateTo(PanelState.Center) }
                                                     }
                                                     .padding(horizontal = 12.dp, vertical = 10.dp),
                                                 verticalAlignment = Alignment.CenterVertically
@@ -441,7 +440,7 @@ fun MainEditorScreen(
                         Box {
                             ScribeEditorTopBar(
                                 title          = activeNote?.name,
-                                onNavClick     = { isLeftDrawerOpen = !isLeftDrawerOpen },
+                                onNavClick     = { scope.launch { panelState.animateTo(if (isLeftDrawerOpen) PanelState.Center else PanelState.LeftOpen) } },
                                 onTitleClick   = {
                                     if (activeNote != null)
                                         scope.launch { captureForDialog { showRenameDialog = true } }
@@ -449,7 +448,7 @@ fun MainEditorScreen(
                                 navigationIcon = Icons.Default.Menu,
                                 visible        = !zenMode,
                                 actions        = listOf(
-                                    ScribeBarAction(Icons.Default.Dock,        "Outline & Pinned Notes") { isRightPanelOpen = true },
+                                    ScribeBarAction(Icons.Default.Dock,        "Outline & Pinned Notes") { scope.launch { panelState.animateTo(PanelState.RightOpen) } },
                                     ScribeBarAction(Icons.Default.Search,      "Find")                   { showFindBar = !showFindBar },
                                     ScribeBarAction(Icons.Default.BookmarkAdd, "Save Checkpoint")        {
                                         editorVm.saveManualSnapshot(soraEditorRef?.text?.toString() ?: "")
@@ -771,77 +770,37 @@ fun MainEditorScreen(
                     onRemoveBottom        = { id -> editorVm.removePinnedBottom(id) },
                     onPickTop             = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
                     onPickBottom          = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
-                    onClose               = { isRightPanelOpen = false },
+                    onClose               = { scope.launch { panelState.animateTo(PanelState.Center) } },
                     barBlurBitmap         = barBlurBitmap,
                     hazeState             = hazeState,
                 )
             }, // end Layout content lambda
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(isKeyboardVisible) {
-                    if (isKeyboardVisible) return@pointerInput
-                    detectHorizontalDragGestures(
-                        onHorizontalDrag = { change, dragAmount ->
-                            change.consume()
-                            if ((leftFraction == 0f || leftFraction == 1f) &&
-                                (rightFraction == 0f || rightFraction == 1f)
-                            ) {
-                                if (dragAmount > 20f && !isRightPanelOpen) {
-                                    if (isRightPanelOpen) isRightPanelOpen = false
-                                    else isLeftDrawerOpen = true
-                                } else if (dragAmount < -20f && !isLeftDrawerOpen) {
-                                    if (isLeftDrawerOpen) isLeftDrawerOpen = false
-                                    else isRightPanelOpen = true
-                                }
-                            }
-                        }
-                    )
-                }
+                .then(
+                    if (!isKeyboardVisible)
+                        Modifier.anchoredDraggable(panelState, Orientation.Horizontal)
+                    else Modifier
+                )
         ) { measurables, constraints ->
-            // ── Measure all three children ─────────────────────────────────────
             val drawerWidthPx = (300 * density).toInt()
             val screenWidth   = constraints.maxWidth
             val screenHeight  = constraints.maxHeight
 
-            val drawerPlaceable = measurables[0].measure(
-                Constraints.fixed(drawerWidthPx, screenHeight)
-            )
-            val editorPlaceable = measurables[1].measure(
-                Constraints.fixed(screenWidth, screenHeight)
-            )
-            val rightPlaceable  = measurables[2].measure(
-                Constraints.fixed(screenWidth, screenHeight)
-            )
+            val drawerPlaceable = measurables[0].measure(Constraints.fixed(drawerWidthPx, screenHeight))
+            val editorPlaceable = measurables[1].measure(Constraints.fixed(screenWidth, screenHeight))
+            val rightPlaceable  = measurables[2].measure(Constraints.fixed(screenWidth, screenHeight))
 
             layout(screenWidth, screenHeight) {
-                // ── Left drawer position ───────────────────────────────────────
-                val drawerX = lerp(
-                    -drawerWidthPx.toFloat(),
-                    0f,
-                    leftFraction
-                ).roundToInt()
-
-                // ── Editor position ────────────────────────────────────────────
-                val editorX = lerp(
-                    0f,
-                    drawerWidthPx.toFloat(),
-                    leftFraction
-                ).roundToInt() + lerp(
-                    0f,
-                    -screenWidth.toFloat(),
-                    rightFraction
-                ).roundToInt()
-
-                // ── Right panel position ───────────────────────────────────────
-                val rightX = lerp(
-                    screenWidth.toFloat(),
-                    0f,
-                    rightFraction
-                ).roundToInt()
-
-                drawerPlaceable.placeRelative(x = drawerX, y = 0)
-                editorPlaceable.placeRelative(x = editorX, y = 0)
-                rightPlaceable.placeRelative(x = rightX,  y = 0)
+                panelState.updateAnchors(DraggableAnchors {
+                    PanelState.LeftOpen  at drawerWidthPx.toFloat()
+                    PanelState.Center    at 0f
+                    PanelState.RightOpen at -screenWidth.toFloat()
+                })
+                val offset = panelState.requireOffset()
+                drawerPlaceable.placeRelative(x = (offset - drawerWidthPx).roundToInt(), y = 0)
+                editorPlaceable.placeRelative(x = offset.roundToInt(), y = 0)
+                rightPlaceable.placeRelative(x = (screenWidth + offset).roundToInt(), y = 0)
             }
         } // end Layout
 
