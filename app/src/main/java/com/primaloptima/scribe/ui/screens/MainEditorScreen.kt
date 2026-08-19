@@ -44,6 +44,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.updateTransition
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.util.lerp
 import com.primaloptima.scribe.ui.theme.LocalBarBlurBitmap
@@ -343,8 +344,33 @@ fun MainEditorScreen(
             transitionSpec = { tween(durationMillis = 350) }, label = "rightFraction"
         ) { if (it) 1f else 0f }
 
-        Layout(
-            content = {
+        SubcomposeLayout(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(isKeyboardVisible) {
+                    if (isKeyboardVisible) return@pointerInput
+                    detectHorizontalDragGestures(
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            if (!leftTransition.isRunning && !rightTransition.isRunning) {
+                                if (dragAmount > 20f && !isRightPanelOpen) {
+                                    if (isRightPanelOpen) isRightPanelOpen = false
+                                    else isLeftDrawerOpen = true
+                                } else if (dragAmount < -20f && !isLeftDrawerOpen) {
+                                    if (isLeftDrawerOpen) isLeftDrawerOpen = false
+                                    else isRightPanelOpen = true
+                                }
+                            }
+                        }
+                    )
+                }
+        ) { constraints ->
+            val drawerWidthPx = (300 * density).roundToInt()
+            val screenWidth   = constraints.maxWidth
+            val screenHeight  = constraints.maxHeight
+
+            // ── Measure Child 0: Left drawer ──────────────────────────────────
+            val drawerPlaceables = subcompose(0) {
                 // Child 0: Left drawer (300dp wide)
                 CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
                     Box(modifier = Modifier.fillMaxHeight().width(300.dp)) {
@@ -456,6 +482,10 @@ fun MainEditorScreen(
                     }
                 }
 
+            }.map { it.measure(Constraints.fixed(drawerWidthPx, screenHeight)) }
+
+            // ── Measure Child 1: Main editor ──────────────────────────────────
+            val editorPlaceables = subcompose(1) {
                 // Child 1: Main editor (full screen, gets pushed right when drawer opens)
                 // ── Main editor ───────────────────────────────────────────────────
                 Scaffold(
@@ -766,6 +796,10 @@ fun MainEditorScreen(
                                 }
                             } // end Scaffold content lambda
 
+            }.map { it.measure(Constraints.fixed(screenWidth, screenHeight)) }
+
+            // ── Measure Child 2: Right companion panel ────────────────────────
+            val rightPlaceables = subcompose(2) {
                 // Child 2: Right companion panel (full screen, slides in from right)
                 RightCompanionPanel(
                     rightPanelTab         = rightPanelTab,
@@ -800,88 +834,20 @@ fun MainEditorScreen(
                     barBlurBitmap         = barBlurBitmap,
                     hazeState             = hazeState,
                 )
-            } // end Layout content lambda
-        },
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(isKeyboardVisible) {
-                    if (isKeyboardVisible) return@pointerInput
-                    // Detect horizontal swipe gestures on the layout to open/close panels.
-                    // We use detectHorizontalDragGestures which only fires for clear horizontal swipes.
-                    detectHorizontalDragGestures(
-                        onHorizontalDrag = { change, dragAmount ->
-                            change.consume()
-                            if (!leftTransition.isRunning && !rightTransition.isRunning) {
-                                if (dragAmount > 20f && !isRightPanelOpen) {
-                                    // Swipe right → open left drawer (or close right panel)
-                                    if (isRightPanelOpen) isRightPanelOpen = false
-                                    else isLeftDrawerOpen = true
-                                } else if (dragAmount < -20f && !isLeftDrawerOpen) {
-                                    // Swipe left → open right panel (or close left drawer)
-                                    if (isLeftDrawerOpen) isLeftDrawerOpen = false
-                                    else isRightPanelOpen = true
-                                }
-                            }
-                        }
-                    )
-                },
-            measurePolicy = { measurables, constraints ->
-            // ── Measure all three children ────────────────────────────────────
-            val drawerWidthPx = (300 * density).toInt()
-            val screenWidth   = constraints.maxWidth
-            val screenHeight  = constraints.maxHeight
+            }.map { it.measure(Constraints.fixed(screenWidth, screenHeight)) }
 
-            // Drawer is fixed 300dp wide, full height
-            val drawerPlaceable = measurables[0].measure(
-                Constraints.fixed(drawerWidthPx, screenHeight)
-            )
-            // Editor fills the full screen
-            val editorPlaceable = measurables[1].measure(
-                Constraints.fixed(screenWidth, screenHeight)
-            )
-            // Right panel fills the full screen
-            val rightPlaceable  = measurables[2].measure(
-                Constraints.fixed(screenWidth, screenHeight)
-            )
-
+            // ── Position all three children ───────────────────────────────────
             layout(screenWidth, screenHeight) {
-                // ── Left drawer position ──────────────────────────────────────
-                // Closed: slides fully off-screen to the left (-drawerWidthPx)
-                // Open:   sits at x=0, fully visible
-                val drawerX = lerp(
-                    -drawerWidthPx.toFloat(),
-                    0f,
-                    leftFraction.value
-                ).roundToInt()
+                val drawerX = lerp(-drawerWidthPx.toFloat(), 0f, leftFraction.value).roundToInt()
+                val editorX = lerp(0f, drawerWidthPx.toFloat(), leftFraction.value).roundToInt() +
+                              lerp(0f, -screenWidth.toFloat(), rightFraction.value).roundToInt()
+                val rightX  = lerp(screenWidth.toFloat(), 0f, rightFraction.value).roundToInt()
 
-                // ── Editor position ───────────────────────────────────────────
-                // Closed: x=0 (full screen)
-                // Left open: x=+drawerWidthPx (pushed right, drawer peeks from left)
-                // Right open: x=-screenWidth (pushed left off-screen by right panel)
-                val editorX = lerp(
-                    0f,
-                    drawerWidthPx.toFloat(),
-                    leftFraction.value
-                ).roundToInt() + lerp(
-                    0f,
-                    -screenWidth.toFloat(),
-                    rightFraction.value
-                ).roundToInt()
-
-                // ── Right panel position ──────────────────────────────────────
-                // Closed: sits off-screen to the right (x=+screenWidth)
-                // Open:   x=0, fully visible
-                val rightX = lerp(
-                    screenWidth.toFloat(),
-                    0f,
-                    rightFraction.value
-                ).roundToInt()
-
-                drawerPlaceable.placeRelative(x = drawerX, y = 0)
-                editorPlaceable.placeRelative(x = editorX, y = 0)
-                rightPlaceable.placeRelative(x = rightX,  y = 0)
+                drawerPlaceables.forEach { it.placeRelative(x = drawerX, y = 0) }
+                editorPlaceables.forEach { it.placeRelative(x = editorX, y = 0) }
+                rightPlaceables.forEach  { it.placeRelative(x = rightX,  y = 0) }
             }
-        }) // end Layout
+        } // end SubcomposeLayout
 
         // ── Floating Windows Overlay ──────────────────────────────────────────
         val mappedNotes = remember(currentBookNotes, worldEntries) {
