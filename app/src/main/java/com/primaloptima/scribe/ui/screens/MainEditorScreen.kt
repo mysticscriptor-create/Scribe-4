@@ -12,8 +12,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -41,8 +39,12 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import android.graphics.Bitmap
 import android.os.Build
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.util.lerp
 import com.primaloptima.scribe.ui.theme.LocalBarBlurBitmap
 import com.primaloptima.scribe.ui.theme.LocalHazeState
 import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
@@ -76,7 +78,6 @@ import coil3.compose.AsyncImage
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -129,16 +130,11 @@ fun MainEditorScreen(
     val context = LocalContext.current
     val scope   = rememberCoroutineScope()
 
-    // 2-page pager: 0 = editor (home), 1 = right companion.
-    // Drawer is a separate overlay driven by drawerOffsetPx so it slides over
-    // the editor without pushing it off-screen.
-    val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
-
-    // Drawer overlay state — offset in px: -drawerWidthPx = hidden, 0f = fully open.
-    val drawerWidthDp   = 300.dp
-    val drawerOffsetPx  = remember { androidx.compose.animation.core.Animatable(-1f) } // -1 = uninitialised
-    var drawerHiddenPx  by remember { mutableFloatStateOf(-900f) } // updated once density is known
-    var isPillDragging  by remember { mutableStateOf(false) }
+    // ── Panel open/close state ────────────────────────────────────────────────
+    // isLeftDrawerOpen  = true  → left panel slides in, editor is pushed right
+    // isRightPanelOpen  = true  → right companion panel slides in from right
+    var isLeftDrawerOpen  by remember { mutableStateOf(false) }
+    var isRightPanelOpen  by remember { mutableStateOf(false) }
 
     // ── Frosted-glass blur bitmaps (pre-API-31 fallback) ─────────────────────
     // Left and right panels use LocalBarBlurBitmap (pre-blurred by ScribeTheme)
@@ -275,21 +271,19 @@ fun MainEditorScreen(
     }
 
     // ── Back-press handlers ───────────────────────────────────────────────────
-    // drawerOffsetPx starts at -1f (uninitialised sentinel set in LaunchedEffect).
-    // Once initialised it is always <= 0f. Value > -20f means drawer is open/opening.
-    val isDrawerOpen by remember { derivedStateOf { drawerOffsetPx.value > -20f } }
-    if (isDrawerOpen) {
-        BackHandler { scope.launch { drawerOffsetPx.animateTo(drawerHiddenPx) } }
-    }
-    if (pagerState.currentPage == 1) {
-        BackHandler { scope.launch { pagerState.animateScrollToPage(0) } }
+    // If either panel is open, back press closes it. Otherwise, exits the editor.
+    if (isLeftDrawerOpen || isRightPanelOpen) {
+        BackHandler {
+            isLeftDrawerOpen = false
+            isRightPanelOpen = false
+        }
     }
 
     // ── 3-page pager layout ───────────────────────────────────────────────────
     // Page 0 = Left drawer (partial width, editor peeks right)
     // Page 1 = Editor (home position, full screen)
     // Page 2 = Right companion panel (full screen)
-    // HorizontalPager owns all swipe physics — no manual gesture detector needed.
+    // Custom Layout composable drives panel animations — see below.
     val isKeyboardVisible = WindowInsets.isImeVisible
     Box(modifier = Modifier.fillMaxSize()) {
         val hazeState = LocalHazeState.current ?: dev.chrisbanes.haze.HazeState()
@@ -320,125 +314,170 @@ fun MainEditorScreen(
             Box(Modifier.fillMaxSize().background(themeBgColor.copy(alpha = bgOpacity)))
         }
 
-        // ── Layout: editor pager + drawer overlay ────────────────────────────
-        // The drawer slides over the editor as a z-ordered Box — the editor
-        // never moves, so it always peeks behind the 300 dp drawer panel.
-        // The pager handles only editor (page 0) ↔ companion (page 1).
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val screenWidthPx = with(LocalDensity.current) { maxWidth.toPx() }
-            val drawerPx      = with(LocalDensity.current) { drawerWidthDp.toPx() }
+        // ── Custom push-drawer Layout ─────────────────────────────────────────
+        // Instead of HorizontalPager (which forces all pages to the same size),
+        // we use Compose's low-level Layout composable to manually measure and
+        // place three children: left drawer (300dp), editor (full screen),
+        // and right panel (full screen).
+        //
+        // How the animation works:
+        //   - updateTransition drives a 0f→1f float for each panel.
+        //   - lerp() converts that float into pixel positions for every child.
+        //   - Left drawer:  slides from -drawerWidth to 0 (comes in from left)
+        //   - Editor:       slides from 0 to +drawerWidth (pushed right by drawer)
+        //   - Right panel:  slides from +screenWidth to 0 (comes in from right)
+        //
+        // This gives the true "paper pushing paper" effect you wanted.
+        // Swipe-right gesture on the editor opens the left drawer.
+        // Swipe-left gesture on the editor opens the right panel.
 
-            // Initialise offset to hidden on first composition; update drawerHiddenPx
-            LaunchedEffect(drawerPx) {
-                drawerHiddenPx = -drawerPx
-                if (drawerOffsetPx.value == -1f || drawerOffsetPx.value < -drawerPx)
-                    drawerOffsetPx.snapTo(-drawerPx)
-            }
+        val leftTransition  = updateTransition(targetState = isLeftDrawerOpen,  label = "leftDrawer")
+        val rightTransition = updateTransition(targetState = isRightPanelOpen,  label = "rightPanel")
 
-            val isEditorBusy = isKeyboardVisible || isPillDragging ||
-                (soraEditorRef?.cursor?.isSelected == true)
+        val leftFraction  = leftTransition.animateFloat(
+            transitionSpec = { tween(durationMillis = 350) }, label = "leftFraction"
+        ) { if (it) 1f else 0f }
 
-            // ── 2-page pager: editor + companion ─────────────────────────────
-            HorizontalPager(
-                state                = pagerState,
-                beyondViewportPageCount = 1,
-                userScrollEnabled    = !isKeyboardVisible && !isDrawerOpen,
-                modifier             = Modifier
-                    .fillMaxSize()
-                    .pointerInput(isEditorBusy) {
-                        // Gesture coordinator — 6 rules:
-                        // R1: vertical dominant → pass through to Sora
-                        // R2: right-to-left on editor → pager to companion
-                        // R3: left-to-right on editor → open drawer overlay
-                        // R4: isEditorBusy → block all horizontal
-                        // R5: direction held until finger lifts
-                        // R6: 1.5× bias commits dominant axis once
-                        //
-                        // Bug fixes:
-                        // - isDrawerOpen removed from key so gesture isn't cancelled
-                        //   mid-swipe when drawer crosses the open threshold (fixes
-                        //   drawer not closing on right-to-left swipe).
-                        // - Page guard: drawer gestures only active on page 0; on
-                        //   page 1 a right-swipe should navigate back, not open drawer.
-                        // - Spring uses NoBouncy so it never overshoots 0f and flashes.
-                        if (isEditorBusy) return@pointerInput
+        val rightFraction = rightTransition.animateFloat(
+            transitionSpec = { tween(durationMillis = 350) }, label = "rightFraction"
+        ) { if (it) 1f else 0f }
 
-                        awaitEachGesture {
-                            val down = awaitFirstDown(requireUnconsumed = false)
-                            var totalX = 0f; var totalY = 0f
-                            val UNDECIDED = 0; val HORIZ = 1; val VERT = 2
-                            var dir = UNDECIDED
-
-                            // Snapshot page and drawer state at gesture start so they
-                            // don't shift under us mid-gesture (also avoids the key restart).
-                            val startPage        = pagerState.currentPage
-                            val startDrawerOffset = drawerOffsetPx.value
-
-                            while (true) {
-                                val event  = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
-                                val change = event.changes.find { it.id == down.id } ?: break
-                                if (!change.pressed) break  // R5: only end on lift
-
-                                val delta = change.position - change.previousPosition
-                                totalX += delta.x; totalY += delta.y
-
-                                if (dir == UNDECIDED) {
-                                    val ax = kotlin.math.abs(totalX)
-                                    val ay = kotlin.math.abs(totalY)
-                                    if (ax > viewConfiguration.touchSlop || ay > viewConfiguration.touchSlop) {
-                                        dir = if (ax >= ay * 1.5f) HORIZ else VERT  // R6
-                                    }
-                                }
-
-                                if (dir == HORIZ) {
-                                    // Bug 2 fix: on page 1, never intercept — let the
-                                    // pager handle right-swipe as a back navigation.
-                                    if (startPage != 0) continue
-
-                                    val drawerActive = totalX > 0f || drawerOffsetPx.value > -drawerPx
-                                    if (drawerActive) {
-                                        // R3: opening/closing drawer — consume so pager doesn't also scroll
-                                        change.consume()
-                                        val newOffset = (drawerOffsetPx.value + delta.x).coerceIn(-drawerPx, 0f)
-                                        scope.launch { drawerOffsetPx.snapTo(newOffset) }
-                                    }
-                                    // R2: drawer fully closed + swiping left → don't consume;
-                                    // pager's own detector picks it up for companion
-                                }
-                                // R1: VERT → don't consume; Sora gets all events
+        Layout(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(isKeyboardVisible) {
+                    if (isKeyboardVisible) return@pointerInput
+                    // Detect horizontal swipe gestures on the layout to open/close panels.
+                    // We use detectHorizontalDragGestures which only fires for clear horizontal swipes.
+                    androidx.compose.foundation.gestures.detectHorizontalDragGestures { _, dragAmount ->
+                        if (!leftTransition.isRunning && !rightTransition.isRunning) {
+                            if (dragAmount > 20f && !isRightPanelOpen) {
+                                // Swipe right → open left drawer (or close right panel)
+                                if (isRightPanelOpen) isRightPanelOpen = false
+                                else isLeftDrawerOpen = true
+                            } else if (dragAmount < -20f && !isLeftDrawerOpen) {
+                                // Swipe left → open right panel (or close left drawer)
+                                if (isLeftDrawerOpen) isLeftDrawerOpen = false
+                                else isRightPanelOpen = true
                             }
-
-                            // Finger lifted — settle drawer only if it was moving
-                            // Bug 3 fix: use startDrawerOffset so a fast close swipe that
-                            // was already partially applied is always settled.
-                            val drawerMoved = dir == HORIZ && startPage == 0 &&
-                                (totalX > 0f || startDrawerOffset > -drawerPx)
-                            if (drawerMoved) {
-                                val halfWay = -drawerPx / 2f
-                                val target  = if (drawerOffsetPx.value > halfWay) 0f else drawerHiddenPx
-                                scope.launch {
-                                    // Bug 1 fix: NoBouncy so the drawer never overshoots
-                                    // 0f (fully open) or drawerHiddenPx, which caused a
-                                    // brief flash of the drawer appearing then snapping back.
-                                    drawerOffsetPx.animateTo(
-                                        target,
-                                        animationSpec = androidx.compose.animation.core.spring(
-                                            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
-                                            stiffness    = androidx.compose.animation.core.Spring.StiffnessMediumLow
-                                        )
-                                    )
+                        }
+                    }
+                },
+            content = {
+                // Child 0: Left drawer (300dp wide)
+                CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
+                    Box(modifier = Modifier.fillMaxHeight().width(300.dp)) {
+                        ModalDrawerSheet(
+                            drawerContainerColor = Color.Transparent,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .frostedPanel(hazeState)
+                        ) {
+                                Spacer(Modifier.height(12.dp))
+                                PrimaryTabRow(selectedTabIndex = leftPanelTab) {
+                                    Tab(selected = leftPanelTab == 0, onClick = { leftPanelTab = 0 },
+                                        text = { Text("Files", fontWeight = FontWeight.Bold) })
+                                    Tab(selected = leftPanelTab == 1, onClick = { leftPanelTab = 1 },
+                                        text = { Text("World", fontWeight = FontWeight.Bold) })
+                                }
+                                Row(
+                                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    FilterChip(selected = leftDrawerMode == "Current", onClick = { leftDrawerMode = "Current" },
+                                        label = { Text("Current Book", fontSize = 12.sp) })
+                                    FilterChip(selected = leftDrawerMode == "Books", onClick = { leftDrawerMode = "Books" },
+                                        label = { Text("All Books", fontSize = 12.sp) })
+                                }
+                                HorizontalDivider(Modifier.padding(bottom = 4.dp))
+                                val displayNotes   = if (leftDrawerMode == "Current") currentBookNotes else allNotes
+                                val displayFolders = if (leftDrawerMode == "Current") currentBookFolders else allFolders
+                                val folderGrouped2 = remember(displayNotes, displayFolders) {
+                                    buildMap<String, MutableList<Note>> {
+                                        displayNotes.forEach { n ->
+                                            getOrPut(n.folderPath.ifBlank { "/" }) { mutableListOf() }.add(n)
+                                        }
+                                    }
+                                }
+                                Row(
+                                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Notes", fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    IconButton(
+                                        onClick = { scope.launch { captureForDialog { showCreateNoteDialog = true } } },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = "New Note", modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                                LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
+                                    folderGrouped2.forEach { (folderPath, notesInFolder) ->
+                                        val isExpanded = expandedTreeState[folderPath] ?: true
+                                        item(key = "fd_$folderPath") {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
+                                                    .clickable { expandedTreeState[folderPath] = !isExpanded }
+                                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(if (isExpanded) Icons.Default.KeyboardArrowDown
+                                                     else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                                     contentDescription = null, modifier = Modifier.size(16.dp),
+                                                     tint = MaterialTheme.colorScheme.outline)
+                                                Spacer(Modifier.width(4.dp))
+                                                Icon(if (isExpanded) Icons.Default.FolderOpen else Icons.Default.Folder,
+                                                     contentDescription = null, tint = MaterialTheme.colorScheme.primary,
+                                                     modifier = Modifier.size(16.dp))
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(folderPath.substringAfterLast('/').ifEmpty { "Root" },
+                                                     fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
+                                                     modifier = Modifier.weight(1f))
+                                                Text("${notesInFolder.size}", fontSize = 11.sp,
+                                                     color = MaterialTheme.colorScheme.outline)
+                                            }
+                                        }
+                                        if (isExpanded) {
+                                            items(notesInFolder, key = { "nd_${it.id}" }) { note ->
+                                                val isActive = note.id == activeNote?.id
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth()
+                                                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                                                        .clip(RoundedCornerShape(8.dp))
+                                                        .background(if (isActive) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else Color.Transparent)
+                                                        .clickable {
+                                                            editorVm.loadNote(note.id)
+                                                            isLeftDrawerOpen = false
+                                                        }
+                                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(Icons.Outlined.Description, contentDescription = null,
+                                                        modifier = Modifier.size(14.dp),
+                                                        tint = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+                                                    Spacer(Modifier.width(8.dp))
+                                                    Text(note.name, fontSize = 14.sp,
+                                                        fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                                                        color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                                        modifier = Modifier.weight(1f))
+                                                    Text("${note.wordCount}w", fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.outline)
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-            ) { page ->
-            when (page) {
+                }
 
-                // ── Page 0: Editor ────────────────────────────────────────────
-                0 -> {
-            Box(modifier = Modifier.fillMaxSize()) {
-            // ── Main editor ───────────────────────────────────────────────────
-            Scaffold(
+                // Child 1: Main editor (full screen, gets pushed right when drawer opens)
+                // ── Main editor ───────────────────────────────────────────────────
+                Scaffold(
                                 containerColor      = Color.Transparent,
                                 contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.ime),
                                 topBar = {
@@ -446,7 +485,7 @@ fun MainEditorScreen(
                                     Box {
                                         ScribeEditorTopBar(
                                             title          = activeNote?.name,
-                                            onNavClick     = { scope.launch { drawerOffsetPx.animateTo(0f) } },
+                                            onNavClick     = { isLeftDrawerOpen = !isLeftDrawerOpen },
                                             onTitleClick   = {
                                                 if (activeNote != null)
                                                     scope.launch { captureForDialog { showRenameDialog = true } }
@@ -454,7 +493,7 @@ fun MainEditorScreen(
                                             navigationIcon = Icons.Default.Menu,
                                             visible        = !zenMode,
                                             actions        = listOf(
-                                                ScribeBarAction(Icons.Default.Dock,        "Outline & Pinned Notes") { scope.launch { pagerState.animateScrollToPage(1) } },
+                                                ScribeBarAction(Icons.Default.Dock,        "Outline & Pinned Notes") { isRightPanelOpen = true },
                                                 ScribeBarAction(Icons.Default.Search,      "Find")                   { showFindBar = !showFindBar },
                                                 ScribeBarAction(Icons.Default.BookmarkAdd, "Save Checkpoint")        {
                                                     editorVm.saveManualSnapshot(soraEditorRef?.text?.toString() ?: "")
@@ -704,11 +743,7 @@ fun MainEditorScreen(
                                                                 .clip(CircleShape)
                                                                 .frostedFab(LocalHazeState.current)
                                                                 .pointerInput(Unit) {
-                                                                    detectDragGestures(
-                                                                        onDragStart  = { isPillDragging = true },
-                                                                        onDragEnd    = { isPillDragging = false },
-                                                                        onDragCancel = { isPillDragging = false }
-                                                                    ) { change, dragAmount ->
+                                                                    detectDragGestures { change, dragAmount ->
                                                                         change.consume()
                                                                         pillOffsetX += dragAmount.x
                                                                         pillOffsetY += dragAmount.y
@@ -749,180 +784,99 @@ fun MainEditorScreen(
                                     }
                                 }
                             } // end Scaffold content lambda
-            } // end editor Box (page 0)
-                } // end page 0
 
-                // ── Page 1: Right companion panel ─────────────────────────────
-                else -> {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                    RightCompanionPanel(
-                        rightPanelTab         = rightPanelTab,
-                        onTabChange           = { rightPanelTab = it },
-                        pinnedTopNotes        = pinnedTopNotes,
-                        pinnedTopIndex        = pinnedTopIndex,
-                        pinnedBottomNotes     = pinnedBottomNotes,
-                        pinnedBottomIndex     = pinnedBottomIndex,
-                        allNotes              = allNotes,
-                        worldEntries          = worldEntries,
-                        outline               = outline,
-                        activeTheme           = activeTheme,
-                        soraEditorRef         = soraEditorRef,
-                        tabBarAtBottom        = companionTabBarBottom,
-                        splitHorizontal       = companionSplitHorizontal,
-                        onToggleTabBarPos     = { editorVm.setCompanionTabBarBottom(!companionTabBarBottom) },
-                        onToggleSplitLayout   = { editorVm.setCompanionSplitHorizontal(!companionSplitHorizontal) },
-                        onSwapSlots           = { editorVm.swapPinnedSlots() },
-                        onPrevTop             = { editorVm.prevPinnedTop() },
-                        onNextTop             = { editorVm.nextPinnedTop() },
-                        onSwitchTop           = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
-                        onEditTop             = { id -> editorVm.loadNote(id) },
-                        onRemoveTop           = { id -> editorVm.removePinnedTop(id) },
-                        onPrevBottom          = { editorVm.prevPinnedBottom() },
-                        onNextBottom          = { editorVm.nextPinnedBottom() },
-                        onSwitchBottom        = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
-                        onEditBottom          = { id -> editorVm.loadNote(id) },
-                        onRemoveBottom        = { id -> editorVm.removePinnedBottom(id) },
-                        onPickTop             = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
-                        onPickBottom          = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
-                        onClose               = { scope.launch { pagerState.animateScrollToPage(0) } },
-                        barBlurBitmap         = barBlurBitmap,
-                        hazeState             = hazeState,
-                    )
-                    } // end Box for page 1 (companion)
-                } // end page 1
-
-            } // end when(page)
-        } // end HorizontalPager
-
-            // ── Drawer overlay — slides over editor from left ─────────────────
-            // Rendered above the pager (z-order). Only visible when not fully hidden.
-            val drawerProgress = ((drawerOffsetPx.value + drawerPx) / drawerPx)
-                .coerceIn(0f, 1f)
-            if (drawerProgress > 0f) {
-                // Scrim over editor
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = drawerProgress * 0.4f))
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                        ) { scope.launch { drawerOffsetPx.animateTo(drawerHiddenPx) } }
+                // Child 2: Right companion panel (full screen, slides in from right)
+                RightCompanionPanel(
+                    rightPanelTab         = rightPanelTab,
+                    onTabChange           = { rightPanelTab = it },
+                    pinnedTopNotes        = pinnedTopNotes,
+                    pinnedTopIndex        = pinnedTopIndex,
+                    pinnedBottomNotes     = pinnedBottomNotes,
+                    pinnedBottomIndex     = pinnedBottomIndex,
+                    allNotes              = allNotes,
+                    worldEntries          = worldEntries,
+                    outline               = outline,
+                    activeTheme           = activeTheme,
+                    soraEditorRef         = soraEditorRef,
+                    tabBarAtBottom        = companionTabBarBottom,
+                    splitHorizontal       = companionSplitHorizontal,
+                    onToggleTabBarPos     = { editorVm.setCompanionTabBarBottom(!companionTabBarBottom) },
+                    onToggleSplitLayout   = { editorVm.setCompanionSplitHorizontal(!companionSplitHorizontal) },
+                    onSwapSlots           = { editorVm.swapPinnedSlots() },
+                    onPrevTop             = { editorVm.prevPinnedTop() },
+                    onNextTop             = { editorVm.nextPinnedTop() },
+                    onSwitchTop           = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
+                    onEditTop             = { id -> editorVm.loadNote(id) },
+                    onRemoveTop           = { id -> editorVm.removePinnedTop(id) },
+                    onPrevBottom          = { editorVm.prevPinnedBottom() },
+                    onNextBottom          = { editorVm.nextPinnedBottom() },
+                    onSwitchBottom        = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
+                    onEditBottom          = { id -> editorVm.loadNote(id) },
+                    onRemoveBottom        = { id -> editorVm.removePinnedBottom(id) },
+                    onPickTop             = { scope.launch { captureForDialog { filePickerTargetSlot = "top" } } },
+                    onPickBottom          = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
+                    onClose               = { isRightPanelOpen = false },
+                    barBlurBitmap         = barBlurBitmap,
+                    hazeState             = hazeState,
                 )
-                // Drawer panel
-                CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .width(drawerWidthDp)
-                            .offset { IntOffset(drawerOffsetPx.value.roundToInt(), 0) }
-                    ) {
-                        ModalDrawerSheet(
-                            drawerContainerColor = Color.Transparent,
-                            modifier = Modifier.fillMaxSize().frostedPanel(hazeState)
-                        ) {
-                            Spacer(Modifier.height(12.dp))
-                            PrimaryTabRow(selectedTabIndex = leftPanelTab) {
-                                Tab(selected = leftPanelTab == 0, onClick = { leftPanelTab = 0 },
-                                    text = { Text("Files", fontWeight = FontWeight.Bold) })
-                                Tab(selected = leftPanelTab == 1, onClick = { leftPanelTab = 1 },
-                                    text = { Text("World", fontWeight = FontWeight.Bold) })
-                            }
-                            Row(
-                                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                FilterChip(selected = leftDrawerMode == "Current", onClick = { leftDrawerMode = "Current" },
-                                    label = { Text("Current Book", fontSize = 12.sp) })
-                                FilterChip(selected = leftDrawerMode == "Books", onClick = { leftDrawerMode = "Books" },
-                                    label = { Text("All Books", fontSize = 12.sp) })
-                            }
-                            HorizontalDivider(Modifier.padding(bottom = 4.dp))
-                            val displayNotes   = if (leftDrawerMode == "Current") currentBookNotes else allNotes
-                            val displayFolders = if (leftDrawerMode == "Current") currentBookFolders else allFolders
-                            val folderGrouped2 = remember(displayNotes, displayFolders) {
-                                buildMap<String, MutableList<Note>> {
-                                    displayNotes.forEach { n ->
-                                        getOrPut(n.folderPath.ifBlank { "/" }) { mutableListOf() }.add(n)
-                                    }
-                                }
-                            }
-                            Row(
-                                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("Notes", fontWeight = FontWeight.Bold, fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                IconButton(
-                                    onClick = { scope.launch { captureForDialog { showCreateNoteDialog = true } } },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(Icons.Default.Add, contentDescription = "New Note", modifier = Modifier.size(18.dp))
-                                }
-                            }
-                            LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
-                                folderGrouped2.forEach { (folderPath, notesInFolder) ->
-                                    val isExpanded = expandedTreeState[folderPath] ?: true
-                                    item(key = "fd_$folderPath") {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
-                                                .clickable { expandedTreeState[folderPath] = !isExpanded }
-                                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(if (isExpanded) Icons.Default.KeyboardArrowDown
-                                                 else Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                                 contentDescription = null, modifier = Modifier.size(16.dp),
-                                                 tint = MaterialTheme.colorScheme.outline)
-                                            Spacer(Modifier.width(4.dp))
-                                            Icon(if (isExpanded) Icons.Default.FolderOpen else Icons.Default.Folder,
-                                                 contentDescription = null, tint = MaterialTheme.colorScheme.primary,
-                                                 modifier = Modifier.size(16.dp))
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(folderPath.substringAfterLast('/').ifEmpty { "Root" },
-                                                 fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
-                                                 modifier = Modifier.weight(1f))
-                                            Text("${notesInFolder.size}", fontSize = 11.sp,
-                                                 color = MaterialTheme.colorScheme.outline)
-                                        }
-                                    }
-                                    if (isExpanded) {
-                                        items(notesInFolder, key = { "nd_${it.id}" }) { note ->
-                                            val isActive = note.id == activeNote?.id
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth()
-                                                    .padding(horizontal = 8.dp, vertical = 2.dp)
-                                                    .clip(RoundedCornerShape(8.dp))
-                                                    .background(if (isActive) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else Color.Transparent)
-                                                    .clickable {
-                                                        editorVm.loadNote(note.id)
-                                                        scope.launch { drawerOffsetPx.animateTo(drawerHiddenPx) }
-                                                    }
-                                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(Icons.Outlined.Description, contentDescription = null,
-                                                    modifier = Modifier.size(14.dp),
-                                                    tint = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
-                                                Spacer(Modifier.width(8.dp))
-                                                Text(note.name, fontSize = 14.sp,
-                                                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-                                                    color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                                    modifier = Modifier.weight(1f))
-                                                Text("${note.wordCount}w", fontSize = 11.sp,
-                                                    color = MaterialTheme.colorScheme.outline)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            } // end Layout content lambda
+        ) { measurables, constraints ->
+            // ── Measure all three children ────────────────────────────────────
+            val drawerWidthPx = (300 * density).toInt()
+            val screenWidth   = constraints.maxWidth
+            val screenHeight  = constraints.maxHeight
+
+            // Drawer is fixed 300dp wide, full height
+            val drawerPlaceable = measurables[0].measure(
+                Constraints.fixed(drawerWidthPx, screenHeight)
+            )
+            // Editor fills the full screen
+            val editorPlaceable = measurables[1].measure(
+                Constraints.fixed(screenWidth, screenHeight)
+            )
+            // Right panel fills the full screen
+            val rightPlaceable  = measurables[2].measure(
+                Constraints.fixed(screenWidth, screenHeight)
+            )
+
+            layout(screenWidth, screenHeight) {
+                // ── Left drawer position ──────────────────────────────────────
+                // Closed: slides fully off-screen to the left (-drawerWidthPx)
+                // Open:   sits at x=0, fully visible
+                val drawerX = lerp(
+                    -drawerWidthPx.toFloat(),
+                    0f,
+                    leftFraction.value
+                ).roundToInt()
+
+                // ── Editor position ───────────────────────────────────────────
+                // Closed: x=0 (full screen)
+                // Left open: x=+drawerWidthPx (pushed right, drawer peeks from left)
+                // Right open: x=-screenWidth (pushed left off-screen by right panel)
+                val editorX = lerp(
+                    0f,
+                    drawerWidthPx.toFloat(),
+                    leftFraction.value
+                ).roundToInt() + lerp(
+                    0f,
+                    -screenWidth.toFloat(),
+                    rightFraction.value
+                ).roundToInt()
+
+                // ── Right panel position ──────────────────────────────────────
+                // Closed: sits off-screen to the right (x=+screenWidth)
+                // Open:   x=0, fully visible
+                val rightX = lerp(
+                    screenWidth.toFloat(),
+                    0f,
+                    rightFraction.value
+                ).roundToInt()
+
+                drawerPlaceable.placeRelative(x = drawerX, y = 0)
+                editorPlaceable.placeRelative(x = editorX, y = 0)
+                rightPlaceable.placeRelative(x = rightX,  y = 0)
             }
-        } // end BoxWithConstraints
+        } // end Layout
 
         // ── Floating Windows Overlay ──────────────────────────────────────────
         val mappedNotes = remember(currentBookNotes, worldEntries) {
