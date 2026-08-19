@@ -1827,4 +1827,4 @@ private fun CodeEditor.insertAtCursor(str: String) {
 
 private fun parseComposeColor(hex: String, fallback: Color): Color = try {
     Color(android.graphics.Color.parseColor(hex))
-} catch (_: Exception) { fallback }
+} catch (_: Exception) { fallbfallba
