@@ -88,7 +88,13 @@ import com.primaloptima.scribe.viewmodel.NoteListViewModel
 import com.primaloptima.scribe.viewmodel.ShortcutsViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.roundToInt
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 
 // ── Sora Editor imports ───────────────────────────────────────────────────────
 import androidx.compose.ui.viewinterop.AndroidView
@@ -143,6 +149,59 @@ fun MainEditorScreen(
     }
     val isLeftDrawerOpen = panelState.targetValue == PanelState.LeftOpen
     val isRightPanelOpen = panelState.targetValue == PanelState.RightOpen
+
+    // ── Gesture conflict fix: NestedScrollConnection ──────────────────────────
+    // anchoredDraggable alone consumes every horizontal pixel, including slightly-angled
+    // vertical scrolls in the Sora editor. The connection sits in onPreScroll and only
+    // forwards a delta to panelState when the horizontal component clearly dominates (2:1
+    // ratio). Pure or near-vertical scrolls return Offset.Zero so the editor handles them.
+    // onPostFling snaps the panel to whichever anchor it is already targeting — we do NOT
+    // call settle(velocity) because that signature no longer accepts a velocity parameter
+    // in the Foundation version shipped with BOM 2026.08.00.
+    val panelScrollConnection = remember(panelState) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val absX = abs(available.x)
+                val absY = abs(available.y)
+                // Only intercept when horizontal dominates AND the keyboard is not up
+                // AND the panel is not already locked to an edge that blocks this direction.
+                if (absX < absY * 2f) return Offset.Zero
+                val consumed = panelState.dispatchRawDelta(available.x)
+                return Offset(consumed, 0f)
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                // Snap to the nearest anchor the state already decided on during the drag.
+                // animateTo(targetValue) is safe here; if the state is already settled it
+                // is a no-op.
+                scope.launch { panelState.animateTo(panelState.targetValue) }
+                return Velocity.Zero
+            }
+        }
+    }
+
+    // ── Fix 2: Dismiss Sora's text-action popup when a panel opens ────────────
+    // When the user has text selected and swipes to open a panel, the EditorTextActionWindow
+    // PopupWindow follows the editor's visual position and floats over the panel UI.
+    // Watching targetValue (not currentValue) fires as soon as a panel drag starts so the
+    // popup is gone before it can render in the wrong place.
+    val isPanelOpen = isLeftDrawerOpen || isRightPanelOpen
+    LaunchedEffect(isPanelOpen) {
+        if (isPanelOpen) {
+            soraEditorRef?.let { editor ->
+                // Clear text selection so the popup has no reason to reappear.
+                if (editor.cursor.isSelected) {
+                    editor.setSelection(editor.cursor.leftLine, editor.cursor.leftColumn)
+                }
+                // Dismiss the action window.
+                try {
+                    editor.getComponent(
+                        io.github.rosemoe.sora.widget.component.EditorTextActionWindow::class.java
+                    ).dismiss()
+                } catch (_: Exception) { }
+            }
+        }
+    }
 
     // ── Frosted-glass blur bitmaps (pre-API-31 fallback) ─────────────────────
     val view         = LocalView.current
@@ -492,6 +551,21 @@ fun MainEditorScreen(
                                             isWordwrap             = true
                                             setEditorLanguage(ScribeProseLanguage())
 
+                                            // Fix 3a: Allow Sora's scroll events to bubble up
+                                            // through the Compose nestedScroll chain so the
+                                            // NestedScrollConnection on the Layout can receive them.
+                                            isNestedScrollingEnabled = true
+
+                                            // Fix 3b: Disable the built-in EditorTextActionWindow
+                                            // in the factory (one-time setup) so it never shows.
+                                            // We rely on Fix 2's LaunchedEffect as a safety net for
+                                            // any edge cases, but disabling here is the primary guard.
+                                            try {
+                                                getComponent(
+                                                    io.github.rosemoe.sora.widget.component.EditorTextActionWindow::class.java
+                                                ).isEnabled = false
+                                            } catch (_: Exception) { }
+
                                             subscribeEvent(ContentChangeEvent::class.java) { _, _ ->
                                                 if (loadedNoteId != null)
                                                     editorVm.onContentChanged(text.toString())
@@ -626,9 +700,15 @@ fun MainEditorScreen(
             }, // end Layout content lambda
             modifier = Modifier
                 .fillMaxSize()
+                // nestedScroll must be applied before anchoredDraggable so the connection
+                // sees raw deltas first and can gate what anchoredDraggable receives.
+                // When the keyboard is visible we skip both — the user is typing and panel
+                // swipes should be completely disabled to prevent accidental navigation.
                 .then(
                     if (!isKeyboardVisible)
-                        Modifier.anchoredDraggable(panelState, Orientation.Horizontal)
+                        Modifier
+                            .nestedScroll(panelScrollConnection)
+                            .anchoredDraggable(panelState, Orientation.Horizontal)
                     else Modifier
                 )
         ) { measurables, constraints ->
