@@ -105,27 +105,11 @@ class ScribeEditorEngine(
         _charCount.value = initialText.length
         extractOutlineAsync(initialText)
 
-        // Sync changes from textFieldState into DocumentBuffer & trigger stats
-        viewModelScope.launch {
-            snapshotFlow { textFieldState.text.toString() }
-                .collect { currentText ->
-                    if (buffer.asString() != currentText) {
-                        buffer.delete(0, buffer.length())
-                        if (currentText.isNotEmpty()) {
-                            buffer.insert(0, currentText)
-                        }
-                        _lineCount.intValue = buffer.lineCount()
-                        _documentRevision.intValue++
-                        mutationEvents.tryEmit(Unit)
-                    }
-                }
-        }
-
         // 1. Debounced word and char count computation
         mutationEvents
             .debounce(300)
             .onEach {
-                val snapshot = textFieldState.text.toString()
+                val snapshot = buffer.asString()
                 val words = withContext(Dispatchers.Default) { countWords(snapshot) }
                 val chars = snapshot.length
                 _wordCount.value = words
@@ -138,7 +122,7 @@ class ScribeEditorEngine(
         mutationEvents
             .debounce(500)
             .onEach {
-                val snapshot = textFieldState.text.toString()
+                val snapshot = buffer.asString()
                 extractOutlineAsync(snapshot)
             }
             .flowOn(Dispatchers.Default)
@@ -260,11 +244,22 @@ class ScribeEditorEngine(
 
     fun insertAtCursor(text: String) {
         if (text.isEmpty()) return
+        val insertPos = textFieldState.selection.end.coerceIn(0, textFieldState.text.length)
         textFieldState.edit {
-            val cursor = selection.end.coerceIn(0, length)
-            insert(cursor, text)
-            this.selection = TextRange((cursor + text.length).coerceIn(0, length))
+            insert(insertPos, text)
+            this.selection = TextRange((insertPos + text.length).coerceIn(0, length))
         }
+        val edit = buffer.insert(insertPos, text)
+        formats.adjustForInsert(insertPos, text.length)
+        undoStack.push(
+            UndoEntry(
+                bufferEdit = edit,
+                formatEdit = null,
+                cursorBefore = CursorPos(buffer.lineIndexAt(insertPos), 0),
+                cursorAfter = CursorPos(buffer.lineIndexAt(insertPos + text.length), 0),
+                label = "Paste"
+            )
+        )
         notifyMutation()
     }
 
@@ -441,12 +436,12 @@ class ScribeEditorEngine(
 
     // ── Serialization & Document Loading ─────────────────────────────────
 
-    fun exportPlainText(): String = textFieldState.text.toString()
+    fun exportPlainText(): String = buffer.asString()
 
     fun exportWithFormats(): SerializedDocument {
         return SerializedDocument(
             version = 2,
-            plainText = textFieldState.text.toString(),
+            plainText = buffer.asString(),
             spans = formats.exportAll().map { it.toSerializedSpan() }
         )
     }

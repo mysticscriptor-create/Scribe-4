@@ -14,9 +14,7 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
@@ -26,7 +24,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,19 +44,28 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.primaloptima.scribe.R
-import com.primaloptima.scribe.engine.FormatType
 import com.primaloptima.scribe.engine.ScribeEditorEngine
 import kotlinx.coroutines.flow.drop
 
 /**
- * Individual line composable utilizing Compose 1.12 TextFieldState and BasicTextField.
- * Handles key routing (Enter split, Backspace merge, Up/Down navigation) and custom
- * scene separator decorations.
+ * Single paragraph composable.
+ *
+ * When [isActive] is true (cursor is in this paragraph), renders a live
+ * BasicTextField so the user can type. When false, renders a plain Text()
+ * composable — extremely cheap, enabling a LazyColumn of thousands of
+ * paragraphs without lag.
+ *
+ * [lineDocStart] is the global document character offset where this paragraph
+ * begins. Used so ScribeOutputTransformation knows which spans belong here.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -66,6 +76,8 @@ fun ScribeEditorLine(
     cursorBrush: Brush,
     focusRequester: FocusRequester,
     bringIntoViewRequester: BringIntoViewRequester,
+    isActive: Boolean,
+    lineDocStart: Int,
     modifier: Modifier = Modifier
 ) {
     val initialContent = remember(lineIndex) { engine.buffer.lineContent(lineIndex) }
@@ -74,7 +86,7 @@ fun ScribeEditorLine(
     val typography = MaterialTheme.typography
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    // 1. Sync external changes (Undo, Redo, Load Document, Search Replace) into TextFieldState
+    // Sync external changes (Undo, Redo, Find/Replace, Load) into this line's state
     val docRevision = engine.documentRevision.value
     LaunchedEffect(docRevision, lineIndex) {
         val currentEngineText = engine.buffer.lineContent(lineIndex)
@@ -83,59 +95,79 @@ fun ScribeEditorLine(
         }
     }
 
-    // 2. Sync user keystroke edits from TextFieldState back into DocumentBuffer
-    LaunchedEffect(state) {
-        snapshotFlow { state.text.toString() }
-            .drop(1)
-            .collect { newText ->
-                engine.onLineChanged(lineIndex, newText, state.selection.end)
-            }
+    // Sync user keystrokes back into the DocumentBuffer (only when active)
+    LaunchedEffect(state, isActive) {
+        if (isActive) {
+            snapshotFlow { state.text.toString() }
+                .drop(1)
+                .collect { newText ->
+                    engine.onLineChanged(lineIndex, newText, state.selection.end)
+                }
+        }
     }
 
-    val outputTransformation = remember(lineIndex, engine, colorScheme, typography) {
+    val lineDocEnd = lineDocStart + engine.buffer.lineLength(lineIndex)
+
+    val outputTransformation = remember(lineIndex, engine, colorScheme, typography, lineDocStart) {
         ScribeOutputTransformation(
             engine = engine,
-            lineIndex = lineIndex,
             colorScheme = colorScheme,
-            typography = typography
+            typography = typography,
+            lineDocStart = lineDocStart,
+            lineDocEnd = lineDocEnd
         )
     }
 
     val currentLineText = state.text.toString()
     val isSceneSeparator = currentLineText.trim() == "---" || currentLineText.trim() == "***"
 
+    val effectiveTextStyle = textStyle.copy(
+        lineHeight = if (textStyle.fontSize.isSp) (textStyle.fontSize.value * 1.55f).sp else textStyle.lineHeight
+    )
+
     Column(
         modifier = modifier
             .fillMaxWidth()
             .bringIntoViewRequester(bringIntoViewRequester)
     ) {
-        BasicTextField(
-            state = state,
-            modifier = Modifier
-                .fillMaxWidth()
-                .focusRequester(focusRequester)
-                .onFocusChanged { focusState ->
-                    if (focusState.isFocused) keyboardController?.show()
-                }
-                .onPreviewKeyEvent { keyEvent ->
-                    handleLineKeyEvent(keyEvent, lineIndex, state, engine)
-                },
-            textStyle = textStyle.copy(
-                lineHeight = if (textStyle.fontSize.isSp) (textStyle.fontSize.value * 1.55f).sp else textStyle.lineHeight
-            ),
-            cursorBrush = cursorBrush,
-            lineLimits = androidx.compose.foundation.text.input.TextFieldLineLimits.MultiLine(minHeightInLines = 1),
-            outputTransformation = outputTransformation,
-            inputTransformation = ScribeInputTransformation,
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.Sentences,
-                autoCorrectEnabled = true,
-                keyboardType = KeyboardType.Text,
-                imeAction = ImeAction.Default
+        if (isActive) {
+            // ── Active paragraph: full BasicTextField with keyboard, cursor, IME ──
+            BasicTextField(
+                state = state,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { focusState ->
+                        if (focusState.isFocused) keyboardController?.show()
+                    }
+                    .onPreviewKeyEvent { keyEvent ->
+                        handleLineKeyEvent(keyEvent, lineIndex, state, engine)
+                    },
+                textStyle = effectiveTextStyle,
+                cursorBrush = cursorBrush,
+                lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = 1),
+                outputTransformation = outputTransformation,
+                inputTransformation = ScribeInputTransformation,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Sentences,
+                    autoCorrectEnabled = true,
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Default
+                )
             )
-        )
+        } else {
+            // ── Inactive paragraph: plain Text(), zero IME cost ──
+            val annotatedText = remember(currentLineText, lineDocStart, docRevision) {
+                AnnotatedString(currentLineText)
+            }
+            Text(
+                text = annotatedText,
+                style = effectiveTextStyle,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
 
-        // Visual Scene Separator ornament when user types --- or ***
+        // Scene separator decoration (--- or ***)
         if (isSceneSeparator) {
             Row(
                 modifier = Modifier
