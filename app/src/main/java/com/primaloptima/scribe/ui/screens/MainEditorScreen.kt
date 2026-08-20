@@ -180,29 +180,6 @@ fun MainEditorScreen(
         }
     }
 
-    // ── Fix 2: Dismiss Sora's text-action popup when a panel opens ────────────
-    // When the user has text selected and swipes to open a panel, the EditorTextActionWindow
-    // PopupWindow follows the editor's visual position and floats over the panel UI.
-    // Watching targetValue (not currentValue) fires as soon as a panel drag starts so the
-    // popup is gone before it can render in the wrong place.
-    val isPanelOpen = isLeftDrawerOpen || isRightPanelOpen
-    LaunchedEffect(isPanelOpen) {
-        if (isPanelOpen) {
-            soraEditorRef?.let { editor ->
-                // Clear text selection so the popup has no reason to reappear.
-                if (editor.cursor.isSelected) {
-                    editor.setSelection(editor.cursor.leftLine, editor.cursor.leftColumn)
-                }
-                // Dismiss the action window.
-                try {
-                    editor.getComponent(
-                        io.github.rosemoe.sora.widget.component.EditorTextActionWindow::class.java
-                    ).dismiss()
-                } catch (_: Exception) { }
-            }
-        }
-    }
-
     // ── Frosted-glass blur bitmaps (pre-API-31 fallback) ─────────────────────
     val view         = LocalView.current
     val blurRadiusPx = com.primaloptima.scribe.ui.theme.LocalFrostedBlurRadius.current
@@ -321,6 +298,29 @@ fun MainEditorScreen(
         if (loadedNoteId != note.id || (editor.text.length == 0 && note.content.isNotEmpty())) {
             loadedNoteId = note.id
             editor.setText(note.content)
+        }
+    }
+
+    // ── Fix 2: Dismiss Sora's text-action popup when a panel opens ────────────
+    // Placed here — after soraEditorRef is declared — so the lambda can reference it.
+    // LaunchedEffect is keyed on isPanelOpen (a derived Boolean from targetValue), so it
+    // fires as soon as a panel swipe commits. It clears the selection and calls dismiss()
+    // so the EditorTextActionWindow PopupWindow never renders over the panel UI.
+    val isPanelOpen = isLeftDrawerOpen || isRightPanelOpen
+    LaunchedEffect(isPanelOpen) {
+        if (isPanelOpen) {
+            soraEditorRef?.let { editor ->
+                // Clear text selection so the popup has no reason to reappear.
+                if (editor.cursor.isSelected) {
+                    editor.setSelection(editor.cursor.leftLine, editor.cursor.leftColumn)
+                }
+                // Dismiss the action window (no-op if already disabled, safe to call).
+                try {
+                    editor.getComponent(
+                        io.github.rosemoe.sora.widget.component.EditorTextActionWindow::class.java
+                    ).dismiss()
+                } catch (_: Exception) { }
+            }
         }
     }
 
