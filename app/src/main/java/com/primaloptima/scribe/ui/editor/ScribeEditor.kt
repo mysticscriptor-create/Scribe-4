@@ -1,11 +1,12 @@
 package com.primaloptima.scribe.ui.editor
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -15,12 +16,14 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -30,6 +33,48 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.primaloptima.scribe.engine.ScribeEditorEngine
 import kotlinx.coroutines.flow.collectLatest
+
+/**
+ * Custom BringIntoViewSpec for Scribe editor:
+ * - If the focused line/cursor is already visible anywhere within the viewport, do NOT scroll (distance = 0).
+ *   This ensures tapping on text to place the cursor leaves the line exactly where it is.
+ * - If the cursor is obscured below the visible viewport (e.g. by keyboard), scroll minimally just enough
+ *   to reveal it above the keyboard edge without jumping to the top of the screen.
+ * - If the cursor is above the visible viewport, scroll down just enough to reveal it.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+private val EditorBringIntoViewSpec = object : BringIntoViewSpec {
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float
+    ): Float {
+        val trailingEdge = offset + size
+        val leadingEdge = offset
+
+        // 1. If child is larger than container, align to top
+        if (leadingEdge < 0f && trailingEdge > containerSize) {
+            return leadingEdge
+        }
+
+        // 2. If child is already fully visible within the container bounds, do not scroll!
+        if (leadingEdge >= 0f && trailingEdge <= containerSize) {
+            return 0f
+        }
+
+        // 3. If child is above the top edge, scroll down just enough to reveal it
+        if (leadingEdge < 0f) {
+            return leadingEdge
+        }
+
+        // 4. If child is below the bottom edge, scroll up just enough to reveal it
+        if (trailingEdge > containerSize) {
+            return trailingEdge - containerSize
+        }
+
+        return 0f
+    }
+}
 
 /**
  * Unified High-Performance Scribe Prose Editor.
@@ -53,6 +98,7 @@ fun ScribeEditor(
     val focusRequester = remember { FocusRequester() }
     val colorScheme = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
+    val layoutDirection = LocalLayoutDirection.current
 
     val outputTransformation = remember(engine, colorScheme, typography) {
         ScribeOutputTransformation(
@@ -69,50 +115,46 @@ fun ScribeEditor(
     // Handle programmatic focus requests (from search matches, outline jump, undo/redo)
     LaunchedEffect(engine) {
         engine.focusRequests.collectLatest {
-            focusRequester.requestFocus()
             keyboardController?.show()
         }
     }
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) {
-                focusRequester.requestFocus()
-                keyboardController?.show()
-            }
-            .padding(contentPadding)
-    ) {
-        BasicTextField(
-            state = engine.state,
-            modifier = Modifier
-                .fillMaxSize()
-                .focusRequester(focusRequester),
-            textStyle = effectiveTextStyle,
-            cursorBrush = cursorBrush,
-            scrollState = scrollState,
-            lineLimits = TextFieldLineLimits.Default,
-            outputTransformation = outputTransformation,
-            inputTransformation = ScribeInputTransformation,
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.Sentences,
-                autoCorrectEnabled = true,
-                keyboardType = KeyboardType.Text,
-                imeAction = ImeAction.Default
-            ),
-            decorator = { innerTextField ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .defaultMinSize(minHeight = 400.dp)
-                        .padding(bottom = 200.dp)
-                ) {
-                    innerTextField()
+    CompositionLocalProvider(LocalBringIntoViewSpec provides EditorBringIntoViewSpec) {
+        Box(
+            modifier = modifier.fillMaxSize()
+        ) {
+            BasicTextField(
+                state = engine.state,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .focusRequester(focusRequester),
+                textStyle = effectiveTextStyle,
+                cursorBrush = cursorBrush,
+                scrollState = scrollState,
+                lineLimits = TextFieldLineLimits.Default,
+                outputTransformation = outputTransformation,
+                inputTransformation = ScribeInputTransformation,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Sentences,
+                    autoCorrectEnabled = true,
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Default
+                ),
+                decorator = { innerTextField ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(
+                                start = contentPadding.calculateStartPadding(layoutDirection),
+                                end = contentPadding.calculateEndPadding(layoutDirection),
+                                top = contentPadding.calculateTopPadding(),
+                                bottom = contentPadding.calculateBottomPadding() + 200.dp
+                            )
+                    ) {
+                        innerTextField()
+                    }
                 }
-            }
-        )
+            )
+        }
     }
 }
