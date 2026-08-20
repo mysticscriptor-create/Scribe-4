@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -68,6 +69,7 @@ fun ScribeEditorLine(
     val state = rememberTextFieldState(initialContent)
     val colorScheme = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     // 1. Sync external changes (Undo, Redo, Load Document, Search Replace) into TextFieldState
     val docRevision = engine.documentRevision.value
@@ -109,6 +111,9 @@ fun ScribeEditorLine(
             modifier = Modifier
                 .fillMaxWidth()
                 .focusRequester(focusRequester)
+                .onFocusChanged { focusState ->
+                    if (focusState.isFocused) keyboardController?.show()
+                }
                 .onPreviewKeyEvent { keyEvent ->
                     handleLineKeyEvent(keyEvent, lineIndex, state, engine)
                 },
