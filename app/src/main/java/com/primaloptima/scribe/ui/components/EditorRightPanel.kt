@@ -9,7 +9,9 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -599,7 +601,7 @@ private fun PinnedNoteSlot(
                         .weight(1f)
                         .fillMaxWidth()
                         .padding(horizontal = 8.dp, vertical = 4.dp)
-                        .androidx.compose.foundation.verticalScroll(androidx.compose.foundation.rememberScrollState())
+                        .verticalScroll(rememberScrollState())
                 ) {
                     Text(
                         text = currentNote.content.ifBlank { "(Empty note content)" },
