@@ -1,8 +1,13 @@
 package com.primaloptima.scribe.engine
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.delete
+import androidx.compose.foundation.text.input.insert
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.text.TextRange
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -16,12 +21,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.regex.Pattern
 
 data class LineFocusRequest(
     val lineIndex: Int,
@@ -32,10 +37,14 @@ data class LineFocusRequest(
 
 /**
  * Core ViewModel driving the Scribe Prose Editor Engine.
- * Manages document buffer, formatting spans, undo/redo history, background word-count,
- * outline hierarchy extraction, active selection tracking, and seamless touch/typing synchronization.
+ *
+ * Implements a unified, high-performance editor architecture inspired by Sora Editor:
+ * - Single persistent TextFieldState avoiding IME churn, keyboard flickering, and focus drops.
+ * - Native continuous multi-line selection spanning arbitrary paragraphs.
+ * - Accurate touch-to-character offset resolution.
+ * - Background debounced stats, outline trees, and prose analysis.
  */
-@OptIn(FlowPreview::class)
+@OptIn(FlowPreview::class, ExperimentalFoundationApi::class)
 class ScribeEditorEngine(
     initialContent: String = "",
     initialFormats: List<FormatSpan> = emptyList()
@@ -44,6 +53,9 @@ class ScribeEditorEngine(
     val buffer = DocumentBuffer(initialContent)
     val formats = FormatRegistry().also { it.loadAll(initialFormats) }
     val undoStack = UndoManager(limit = 200)
+
+    // ── Unified Text & Selection State ──────────────────────────────────
+    val state = TextFieldState(initialContent)
 
     // ── Public Observable State ──────────────────────────────────────────
 
@@ -63,7 +75,7 @@ class ScribeEditorEngine(
     private val _activeLineSelection = mutableStateOf(TextRange(0, 0))
     val activeLineSelection: State<TextRange> get() = _activeLineSelection
 
-    // Revision tracker to trigger UI updates when document is mutated
+    // Revision tracker to trigger UI updates when formatting/buffer changes
     private val _documentRevision = mutableIntStateOf(0)
     val documentRevision: State<Int> get() = _documentRevision
 
@@ -93,6 +105,12 @@ class ScribeEditorEngine(
     val searchEngine = FindReplaceEngine(
         getBuffer = { buffer },
         onDocumentModified = {
+            val updated = buffer.asString()
+            if (state.text.toString() != updated) {
+                state.edit {
+                    replace(0, length, updated)
+                }
+            }
             notifyMutation()
         }
     )
@@ -104,6 +122,21 @@ class ScribeEditorEngine(
         _charCount.value = initialText.length
         extractOutlineAsync(initialText)
         runProseAnalysisAsync(initialText)
+
+        // Sync keystrokes from TextFieldState into DocumentBuffer
+        snapshotFlow { state.text.toString() }
+            .drop(1)
+            .onEach { newText ->
+                syncBufferFromUI(newText)
+            }
+            .launchIn(viewModelScope)
+
+        // Sync selection changes to active line and local selection
+        snapshotFlow { state.selection }
+            .onEach { sel ->
+                syncSelectionFromUI(sel)
+            }
+            .launchIn(viewModelScope)
 
         // 1. Debounced word and char count computation
         mutationEvents
@@ -139,6 +172,51 @@ class ScribeEditorEngine(
             .launchIn(viewModelScope)
     }
 
+    private fun syncBufferFromUI(newText: String) {
+        val oldText = buffer.asString()
+        if (oldText == newText) return
+
+        var prefix = 0
+        val minLen = minOf(oldText.length, newText.length)
+        while (prefix < minLen && oldText[prefix] == newText[prefix]) {
+            prefix++
+        }
+        var suffixOld = oldText.length
+        var suffixNew = newText.length
+        while (suffixOld > prefix && suffixNew > prefix && oldText[suffixOld - 1] == newText[suffixNew - 1]) {
+            suffixOld--
+            suffixNew--
+        }
+
+        val deleteLen = suffixOld - prefix
+        val insertText = newText.substring(prefix, suffixNew)
+
+        if (deleteLen > 0) {
+            buffer.delete(prefix, prefix + deleteLen)
+            formats.adjustForDelete(prefix, deleteLen)
+        }
+        if (insertText.isNotEmpty()) {
+            buffer.insert(prefix, insertText)
+            formats.adjustForInsert(prefix, insertText.length)
+        }
+
+        notifyMutation()
+    }
+
+    private fun syncSelectionFromUI(sel: TextRange) {
+        val totalLines = buffer.lineCount()
+        val docLen = state.text.length
+        val safeStart = sel.min.coerceIn(0, docLen)
+        val safeEnd = sel.max.coerceIn(0, docLen)
+        val lineIdx = if (totalLines > 0) buffer.lineIndexAt(safeEnd) else 0
+        val lineStart = if (totalLines > 0) buffer.lineStart(lineIdx) else 0
+        _activeLineIndex.intValue = lineIdx
+        _activeLineSelection.value = TextRange(
+            (safeStart - lineStart).coerceAtLeast(0),
+            (safeEnd - lineStart).coerceAtLeast(0)
+        )
+    }
+
     private fun runProseAnalysisAsync(text: String) {
         viewModelScope.launch(Dispatchers.Default) {
             val result = ProseAnalysisEngine.analyze(text)
@@ -157,31 +235,24 @@ class ScribeEditorEngine(
     }
 
     /**
-     * Mirrors the active paragraph's local selection into engine state
-     * for formatting, shortcuts, and navigation commands.
+     * Mirrors the active paragraph's local selection into engine state.
      */
     fun updateLineSelection(lineIndex: Int, localStart: Int, localEnd: Int) {
         val totalLines = buffer.lineCount()
         val validLine = lineIndex.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
+        val lineStart = buffer.lineStart(validLine)
         val lineLen = buffer.lineLength(validLine)
         val safeStart = localStart.coerceIn(0, lineLen)
         val safeEnd = localEnd.coerceIn(0, lineLen)
         _activeLineIndex.intValue = validLine
         _activeLineSelection.value = TextRange(safeStart, safeEnd)
+        state.edit {
+            selection = TextRange(lineStart + safeStart, lineStart + safeEnd)
+        }
     }
 
     val activeDocSelection: TextRange
-        get() {
-            val totalLines = buffer.lineCount()
-            if (totalLines == 0) return TextRange.Zero
-            val lineIdx = _activeLineIndex.intValue.coerceIn(0, totalLines - 1)
-            val lineStart = buffer.lineStart(lineIdx)
-            val lineLen = buffer.lineLength(lineIdx)
-            val localSel = _activeLineSelection.value
-            val start = (lineStart + localSel.min).coerceIn(lineStart, lineStart + lineLen)
-            val end = (lineStart + localSel.max).coerceIn(lineStart, lineStart + lineLen)
-            return TextRange(start, end)
-        }
+        get() = state.selection
 
     // ── Editing API ──────────────────────────────────────────────────────
 
@@ -189,43 +260,11 @@ class ScribeEditorEngine(
         val totalLines = buffer.lineCount()
         val validLine = lineIndex.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
         val lineStart = buffer.lineStart(validLine)
-        val oldLineText = buffer.lineContent(validLine)
-        if (oldLineText == newText) return
+        val lineEnd = lineStart + buffer.lineLength(validLine)
 
-        val oldLength = oldLineText.length
-        val newLength = newText.length
-        val lineEnd = lineStart + oldLength
-
-        val edit = Edit.Compound(
-            listOf(
-                buffer.delete(lineStart, lineEnd),
-                buffer.insert(lineStart, newText)
-            )
-        )
-
-        formats.adjustForDelete(lineStart, oldLength)
-        formats.adjustForInsert(lineStart, newLength)
-
-        undoStack.push(
-            UndoEntry(
-                bufferEdit = edit,
-                formatEdit = null,
-                cursorBefore = CursorPos(validLine, oldLength),
-                cursorAfter = CursorPos(validLine, cursorPos)
-            )
-        )
-
-        notifyMutation()
-
-        if (newText.contains('\n')) {
-            val firstNewlineIdx = newText.indexOf('\n')
-            if (cursorPos > firstNewlineIdx) {
-                val nextLineIdx = validLine + 1
-                val colInNextLine = (cursorPos - firstNewlineIdx - 1).coerceAtLeast(0)
-                requestLineFocus(nextLineIdx, colInNextLine)
-            } else {
-                requestLineFocus(validLine, cursorPos)
-            }
+        state.edit {
+            replace(lineStart, lineEnd, newText)
+            selection = TextRange((lineStart + cursorPos).coerceIn(0, length))
         }
     }
 
@@ -235,55 +274,32 @@ class ScribeEditorEngine(
         val lineStart = buffer.lineStart(validLine)
         val splitOffset = lineStart + splitAt.coerceIn(0, currentLineText.length)
 
-        val edit = buffer.insert(splitOffset, "\n")
-        formats.adjustForInsert(splitOffset, 1)
-
-        undoStack.push(
-            UndoEntry(
-                bufferEdit = edit,
-                formatEdit = null,
-                cursorBefore = CursorPos(validLine, splitAt),
-                cursorAfter = CursorPos(validLine + 1, 0),
-                label = "New Line"
-            )
-        )
-
-        notifyMutation()
-        requestLineFocus(validLine + 1, 0)
+        state.edit {
+            insert(splitOffset, "\n")
+            selection = TextRange(splitOffset + 1)
+        }
     }
 
     fun onLineMerge(lineIndex: Int) {
         if (lineIndex <= 0) return
-        val prevLineIndex = lineIndex - 1
-        val prevLineLength = buffer.lineLength(prevLineIndex)
         val currentLineStart = buffer.lineStart(lineIndex)
-
         if (currentLineStart > 0) {
-            val deletePos = currentLineStart - 1
-            val edit = buffer.delete(deletePos, currentLineStart)
-            formats.adjustForDelete(deletePos, 1)
-
-            undoStack.push(
-                UndoEntry(
-                    bufferEdit = edit,
-                    formatEdit = null,
-                    cursorBefore = CursorPos(lineIndex, 0),
-                    cursorAfter = CursorPos(prevLineIndex, prevLineLength),
-                    label = "Merge Line"
-                )
-            )
-
-            notifyMutation()
-            requestLineFocus(prevLineIndex, prevLineLength)
+            state.edit {
+                delete(currentLineStart - 1, currentLineStart)
+                selection = TextRange(currentLineStart - 1)
+            }
         }
     }
 
     fun insertAtCursor(text: String) {
         if (text.isEmpty()) return
-        val totalLines = buffer.lineCount()
-        val lineIdx = _activeLineIndex.intValue.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
-        val cursorPos = _activeLineSelection.value.end
-        insertAtCursor(lineIdx, cursorPos, text)
+        val sel = state.selection
+        val s = sel.min
+        val e = sel.max
+        state.edit {
+            replace(s, e, text)
+            selection = TextRange(s + text.length)
+        }
     }
 
     fun insertAtCursor(lineIndex: Int, cursorPos: Int, text: String) {
@@ -295,123 +311,91 @@ class ScribeEditorEngine(
         val safeCursor = cursorPos.coerceIn(0, lineLen)
         val insertPos = lineStart + safeCursor
 
-        val edit = buffer.insert(insertPos, text)
-        formats.adjustForInsert(insertPos, text.length)
-
-        val newCursorCol = safeCursor + text.length
-        undoStack.push(
-            UndoEntry(
-                bufferEdit = edit,
-                formatEdit = null,
-                cursorBefore = CursorPos(validLine, safeCursor),
-                cursorAfter = CursorPos(validLine, newCursorCol),
-                label = "Insert"
-            )
-        )
-
-        notifyMutation()
-        requestLineFocus(validLine, newCursorCol)
+        state.edit {
+            insert(insertPos, text)
+            selection = TextRange(insertPos + text.length)
+        }
     }
 
     fun applyFormatWrap(open: String, close: String) {
-        val totalLines = buffer.lineCount()
-        val lineIdx = _activeLineIndex.intValue.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
-        val sel = _activeLineSelection.value
-        applyFormatWrap(lineIdx, sel.start, sel.end, open, close)
+        val sel = state.selection
+        val s = sel.min
+        val e = sel.max
+        if (s == e) {
+            state.edit {
+                insert(s, "$open$close")
+                selection = TextRange(s + open.length)
+            }
+        } else {
+            val current = state.text.toString()
+            val safeStart = s.coerceIn(0, current.length)
+            val safeEnd = e.coerceIn(0, current.length)
+            val selected = current.substring(safeStart, safeEnd)
+            val wrapped = "$open$selected$close"
+            state.edit {
+                replace(safeStart, safeEnd, wrapped)
+                selection = TextRange(safeStart, safeStart + wrapped.length)
+            }
+        }
     }
 
     fun applyFormatWrap(lineIndex: Int, selStart: Int, selEnd: Int, open: String, close: String) {
         val totalLines = buffer.lineCount()
         val validLine = lineIndex.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
         val lineStart = buffer.lineStart(validLine)
-        val lineLen = buffer.lineLength(validLine)
-        val s = minOf(selStart, selEnd).coerceIn(0, lineLen)
-        val e = maxOf(selStart, selEnd).coerceIn(0, lineLen)
+        val s = (lineStart + minOf(selStart, selEnd)).coerceIn(0, state.text.length)
+        val e = (lineStart + maxOf(selStart, selEnd)).coerceIn(0, state.text.length)
 
         if (s == e) {
-            val insertText = "$open$close"
-            insertAtCursor(validLine, s, insertText)
-            requestLineFocus(validLine, s + open.length)
+            state.edit {
+                insert(s, "$open$close")
+                selection = TextRange(s + open.length)
+            }
         } else {
-            val startPos = lineStart + s
-            val endPos = lineStart + e
-            val selectedText = buffer.substring(startPos, endPos)
-            val wrapped = "$open$selectedText$close"
-
-            val edit = Edit.Compound(
-                listOf(
-                    buffer.delete(startPos, endPos),
-                    buffer.insert(startPos, wrapped)
-                )
-            )
-            formats.adjustForDelete(startPos, endPos - startPos)
-            formats.adjustForInsert(startPos, wrapped.length)
-
-            undoStack.push(
-                UndoEntry(
-                    bufferEdit = edit,
-                    formatEdit = null,
-                    cursorBefore = CursorPos(validLine, s),
-                    cursorAfter = CursorPos(validLine, s + wrapped.length),
-                    label = "Format Wrap"
-                )
-            )
-
-            notifyMutation()
-            requestLineFocus(validLine, s + wrapped.length)
+            val current = state.text.toString()
+            val selected = current.substring(s, e)
+            val wrapped = "$open$selected$close"
+            state.edit {
+                replace(s, e, wrapped)
+                selection = TextRange(s, s + wrapped.length)
+            }
         }
     }
 
     fun deleteSelection() {
-        val totalLines = buffer.lineCount()
-        val lineIdx = _activeLineIndex.intValue.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
-        val sel = _activeLineSelection.value
-        val lineStart = buffer.lineStart(lineIdx)
-        val lineLen = buffer.lineLength(lineIdx)
-        val s = minOf(sel.start, sel.end).coerceIn(0, lineLen)
-        val e = maxOf(sel.start, sel.end).coerceIn(0, lineLen)
-
+        val sel = state.selection
+        val s = sel.min
+        val e = sel.max
         if (s != e) {
-            val startPos = lineStart + s
-            val endPos = lineStart + e
-            val edit = buffer.delete(startPos, endPos)
-            formats.adjustForDelete(startPos, endPos - startPos)
-            undoStack.push(
-                UndoEntry(
-                    bufferEdit = edit,
-                    formatEdit = null,
-                    cursorBefore = CursorPos(lineIdx, e),
-                    cursorAfter = CursorPos(lineIdx, s),
-                    label = "Delete Selection"
-                )
-            )
-            notifyMutation()
-            requestLineFocus(lineIdx, s)
+            state.edit {
+                delete(s, e)
+                selection = TextRange(s)
+            }
         }
     }
 
     fun toggleFormat(type: FormatType) {
-        val docSel = activeDocSelection
-        toggleFormat(type, docSel.min, docSel.max)
+        val sel = state.selection
+        val s = sel.min
+        val e = sel.max
+        if (s == e) {
+            if (buffer.lineCount() > 0) {
+                val lineIdx = buffer.lineIndexAt(s)
+                val lineStart = buffer.lineStart(lineIdx)
+                val lineLen = buffer.lineLength(lineIdx)
+                formats.toggleSpan(type, lineStart, lineStart + lineLen)
+            }
+        } else {
+            formats.toggleSpan(type, s, e)
+        }
+        notifyMutation()
     }
 
     fun toggleFormat(type: FormatType, selStart: Int, selEnd: Int) {
         val docLen = buffer.length()
         val s = minOf(selStart, selEnd).coerceIn(0, docLen)
         val e = maxOf(selStart, selEnd).coerceIn(0, docLen)
-        val formatEdit = formats.toggleSpan(type, s, e)
-
-        val lineIdx = _activeLineIndex.intValue
-        val col = _activeLineSelection.value.end
-        undoStack.push(
-            UndoEntry(
-                bufferEdit = Edit.Compound(emptyList()),
-                formatEdit = formatEdit,
-                cursorBefore = CursorPos(lineIdx, col),
-                cursorAfter = CursorPos(lineIdx, col),
-                label = "Toggle ${type.name}"
-            )
-        )
+        formats.toggleSpan(type, s, e)
         notifyMutation()
     }
 
@@ -421,17 +405,7 @@ class ScribeEditorEngine(
         val start = buffer.lineStart(validLine)
         val length = buffer.lineLength(validLine)
         val end = start + length
-        val formatEdit = formats.toggleSpan(type, start, end)
-
-        undoStack.push(
-            UndoEntry(
-                bufferEdit = Edit.Compound(emptyList()),
-                formatEdit = formatEdit,
-                cursorBefore = CursorPos(validLine, 0),
-                cursorAfter = CursorPos(validLine, length),
-                label = "Toggle Line ${type.name}"
-            )
-        )
+        formats.toggleSpan(type, start, end)
         notifyMutation()
     }
 
@@ -441,19 +415,25 @@ class ScribeEditorEngine(
         val lineStart = buffer.lineStart(validLine)
         val lineLen = buffer.lineLength(validLine)
         val safeCol = if (column >= 0) column.coerceIn(0, lineLen) else lineLen
-        val targetPos = (lineStart + safeCol).coerceIn(0, buffer.length())
+        val targetPos = (lineStart + safeCol).coerceIn(0, state.text.length)
 
+        state.edit {
+            selection = TextRange(targetPos)
+        }
         _activeLineIndex.intValue = validLine
         _activeLineSelection.value = TextRange(safeCol)
         _focusRequests.tryEmit(LineFocusRequest(validLine, safeCol, targetPos))
     }
 
     fun requestOffsetFocus(targetOffset: Int) {
-        val safeOffset = targetOffset.coerceIn(0, buffer.length())
-        val lineIdx = buffer.lineIndexAt(safeOffset)
-        val lineStart = buffer.lineStart(lineIdx)
+        val safeOffset = targetOffset.coerceIn(0, state.text.length)
+        val lineIdx = if (buffer.lineCount() > 0) buffer.lineIndexAt(safeOffset) else 0
+        val lineStart = if (buffer.lineCount() > 0) buffer.lineStart(lineIdx) else 0
         val col = (safeOffset - lineStart).coerceAtLeast(0)
 
+        state.edit {
+            selection = TextRange(safeOffset)
+        }
         _activeLineIndex.intValue = lineIdx
         _activeLineSelection.value = TextRange(col)
         _focusRequests.tryEmit(LineFocusRequest(lineIdx, col, targetOffset = safeOffset))
@@ -463,14 +443,24 @@ class ScribeEditorEngine(
 
     fun undo() {
         val entry = undoStack.undo(buffer, formats) ?: return
+        val newDocText = buffer.asString()
+        state.edit {
+            replace(0, length, newDocText)
+            val targetPos = (buffer.lineStart(entry.cursorBefore.line) + entry.cursorBefore.column).coerceIn(0, length)
+            selection = TextRange(targetPos)
+        }
         notifyMutation()
-        requestLineFocus(entry.cursorBefore.line, entry.cursorBefore.column)
     }
 
     fun redo() {
         val entry = undoStack.redo(buffer, formats) ?: return
+        val newDocText = buffer.asString()
+        state.edit {
+            replace(0, length, newDocText)
+            val targetPos = (buffer.lineStart(entry.cursorAfter.line) + entry.cursorAfter.column).coerceIn(0, length)
+            selection = TextRange(targetPos)
+        }
         notifyMutation()
-        requestLineFocus(entry.cursorAfter.line, entry.cursorAfter.column)
     }
 
     fun saveSnapshot(label: String) {
@@ -480,12 +470,12 @@ class ScribeEditorEngine(
 
     // ── Serialization & Document Loading ─────────────────────────────────
 
-    fun exportPlainText(): String = buffer.asString()
+    fun exportPlainText(): String = state.text.toString()
 
     fun exportWithFormats(): SerializedDocument {
         return SerializedDocument(
             version = 2,
-            plainText = buffer.asString(),
+            plainText = state.text.toString(),
             spans = formats.exportAll().map { it.toSerializedSpan() }
         )
     }
@@ -493,7 +483,6 @@ class ScribeEditorEngine(
     fun loadDocument(doc: SerializedDocument) {
         val plainText = doc.plainText
 
-        // Replace internal buffer data
         buffer.delete(0, buffer.length())
         if (plainText.isNotEmpty()) {
             buffer.insert(0, plainText)
@@ -508,6 +497,13 @@ class ScribeEditorEngine(
         formats.loadAll(newSpans)
         undoStack.clear()
         searchEngine.clear()
+
+        if (state.text.toString() != plainText) {
+            state.edit {
+                replace(0, length, plainText)
+                selection = TextRange(0)
+            }
+        }
 
         _activeLineIndex.intValue = 0
         _activeLineSelection.value = TextRange(0, 0)

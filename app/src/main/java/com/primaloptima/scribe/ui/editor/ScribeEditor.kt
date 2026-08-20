@@ -1,40 +1,43 @@
 package com.primaloptima.scribe.ui.editor
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.primaloptima.scribe.engine.ScribeEditorEngine
-import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.flow.collectLatest
 
 /**
- * Virtualized Prose Editor — LazyColumn of paragraphs.
+ * Unified High-Performance Scribe Prose Editor.
  *
- * Only the paragraph the cursor is in uses a live BasicTextField.
- * Every other paragraph renders as a plain Text() composable.
- * This gives RecyclerView-style virtualization to the editor, making
- * 50,000+ word documents smooth on even low-end Android devices.
+ * Implements a single, persistent InputConnection canvas directly on Compose BasicTextField:
+ * - Single unbroken IME lifecycle: soft keyboard never stutters, closes, or flickers on tap or line change.
+ * - Continuous full-document multi-line text selection: handles drag seamlessly across arbitrary lines & paragraphs.
+ * - Pixel-accurate tap-to-cursor placement: native text layout resolving touch offsets directly to document characters.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -45,69 +48,73 @@ fun ScribeEditor(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(horizontal = 20.dp, vertical = 16.dp)
 ) {
-    val listState = rememberLazyListState()
+    val scrollState = rememberScrollState()
     val keyboardController = LocalSoftwareKeyboardController.current
+    val focusRequester = remember { FocusRequester() }
+    val colorScheme = MaterialTheme.colorScheme
+    val typography = MaterialTheme.typography
 
-    val activeLineIndex = engine.activeLineIndex.value
+    val docRevision = engine.documentRevision.value
 
-    // One FocusRequester per visible line is too expensive.
-    // Use a single one; it always points at the active line's BasicTextField.
-    val activeFocusRequester = remember { FocusRequester() }
-    val activeBringIntoViewRequester = remember { BringIntoViewRequester() }
+    val outputTransformation = remember(engine, colorScheme, typography, docRevision) {
+        ScribeOutputTransformation(
+            engine = engine,
+            colorScheme = colorScheme,
+            typography = typography
+        )
+    }
 
-    // A lazy item must be composed before its FocusRequester can work.
-    LaunchedEffect(activeLineIndex) {
-        val totalLines = engine.buffer.lineCount()
-        if (totalLines > 0) {
-            val target = activeLineIndex.coerceIn(0, totalLines - 1)
-            listState.scrollToItem(target)
-            withFrameNanos { }
-            activeFocusRequester.requestFocus()
+    val effectiveTextStyle = textStyle.copy(
+        lineHeight = if (textStyle.fontSize.isSp) (textStyle.fontSize.value * 1.55f).sp else textStyle.lineHeight
+    )
+
+    // Handle programmatic focus requests (from search matches, outline jump, undo/redo)
+    LaunchedEffect(engine) {
+        engine.focusRequests.collectLatest {
+            focusRequester.requestFocus()
             keyboardController?.show()
         }
     }
 
-    val lineCount = engine.lineCount.value
-
     Box(
-        modifier = modifier.fillMaxSize()
+        modifier = modifier
+            .fillMaxSize()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {
+                focusRequester.requestFocus()
+                keyboardController?.show()
+            }
+            .padding(contentPadding)
     ) {
-        LazyColumn(
-            state = listState,
-            contentPadding = contentPadding,
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(
-                count = lineCount.coerceAtLeast(1),
-                key = { index -> engine.buffer.lineKey(index) }
-            ) { lineIndex ->
-                // Pre-compute this paragraph's global document start offset
-                val lineDocStart = remember(lineIndex, engine.documentRevision.value) {
-                    engine.buffer.lineStart(lineIndex)
+        BasicTextField(
+            state = engine.state,
+            modifier = Modifier
+                .fillMaxSize()
+                .focusRequester(focusRequester),
+            textStyle = effectiveTextStyle,
+            cursorBrush = cursorBrush,
+            scrollState = scrollState,
+            lineLimits = TextFieldLineLimits.Default,
+            outputTransformation = outputTransformation,
+            inputTransformation = ScribeInputTransformation,
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Sentences,
+                autoCorrectEnabled = true,
+                keyboardType = KeyboardType.Text,
+                imeAction = ImeAction.Default
+            ),
+            decorator = { innerTextField ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 400.dp)
+                        .padding(bottom = 200.dp)
+                ) {
+                    innerTextField()
                 }
-                val isLineActive = (lineIndex == activeLineIndex)
-
-                ScribeEditorLine(
-                    lineIndex = lineIndex,
-                    engine = engine,
-                    textStyle = textStyle,
-                    cursorBrush = cursorBrush,
-                    focusRequester = activeFocusRequester,
-                    bringIntoViewRequester = activeBringIntoViewRequester,
-                    isActive = isLineActive,
-                    lineDocStart = lineDocStart,
-                    onActivate = {
-                        engine.requestLineFocus(lineIndex)
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
             }
-
-            // Generous bottom padding so the last line isn't hidden behind the keyboard
-            item {
-                Spacer(modifier = Modifier.defaultMinSize(minHeight = 240.dp))
-            }
-        }
-
+        )
     }
 }
