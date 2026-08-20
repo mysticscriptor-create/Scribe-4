@@ -426,9 +426,9 @@ fun MainEditorScreen(
                                     shortcuts.forEach { shortcut ->
                                         FormatButton(label = shortcut.label) {
                                             when (shortcut.kind) {
-                                                "wrap" -> engine.applyFormatWrap(0, 0, 0, shortcut.payload, shortcut.closing ?: shortcut.payload)
-                                                "pair" -> engine.applyFormatWrap(0, 0, 0, shortcut.payload, shortcut.closing ?: "")
-                                                else   -> engine.insertAtCursor(0, 0, shortcut.payload)
+                                                "wrap" -> engine.applyFormatWrap(shortcut.payload, shortcut.closing ?: shortcut.payload)
+                                                "pair" -> engine.applyFormatWrap(shortcut.payload, shortcut.closing ?: "")
+                                                else   -> engine.insertAtCursor(shortcut.payload)
                                             }
                                         }
                                     }
@@ -452,12 +452,12 @@ fun MainEditorScreen(
                                 onReplaceChange = { replaceQuery = it },
                                 onPrevious    = {
                                     engine.searchEngine.goToPrevious()?.let { match ->
-                                        engine.requestLineFocus(match.lineIndex)
+                                        engine.requestOffsetFocus(match.docOffset)
                                     }
                                 },
                                 onNext        = {
                                     engine.searchEngine.goToNext()?.let { match ->
-                                        engine.requestLineFocus(match.lineIndex)
+                                        engine.requestOffsetFocus(match.docOffset)
                                     }
                                 },
                                 onReplaceAll  = {
@@ -568,7 +568,7 @@ fun MainEditorScreen(
                 // When the keyboard is visible we skip both — the user is typing and panel
                 // swipes should be completely disabled to prevent accidental navigation.
                 .then(
-                    if (!isKeyboardVisible)
+                    if (!isKeyboardVisible && panelState.currentValue != PanelState.Center)
                         Modifier
                             .nestedScroll(panelScrollConnection)
                             .anchoredDraggable(panelState, Orientation.Horizontal)

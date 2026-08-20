@@ -17,7 +17,6 @@ import com.primaloptima.scribe.engine.toSpanStyle
  */
 class ScribeOutputTransformation(
     private val engine: ScribeEditorEngine,
-    private val lineIndex: Int,
     private val colorScheme: ColorScheme,
     private val typography: Typography,
     private val activeHighlightColor: Color = Color(0xFFFFD54F),
@@ -27,14 +26,11 @@ class ScribeOutputTransformation(
     override fun TextFieldBuffer.transformOutput() {
         if (length == 0) return
 
-        val lineStart = engine.buffer.lineStart(lineIndex)
-        val lineEnd = lineStart + length
-
         // 1. Apply prose formatting spans
-        val spans = engine.formats.spansIn(lineStart, lineEnd)
+        val spans = engine.formats.exportAll()
         for (span in spans) {
-            val localStart = (span.start - lineStart).coerceIn(0, length)
-            val localEnd = (span.end - lineStart).coerceIn(0, length)
+            val localStart = span.start.coerceIn(0, length)
+            val localEnd = span.end.coerceIn(0, length)
             if (localStart < localEnd) {
                 val spanStyle = span.type.toSpanStyle(colorScheme, typography)
                 addStyle(spanStyle, localStart, localEnd)
@@ -47,18 +43,16 @@ class ScribeOutputTransformation(
 
         for (i in searchResults.indices) {
             val result = searchResults[i]
-            if (result.lineIndex == lineIndex) {
-                val localStart = result.lineLocalStart.coerceIn(0, length)
-                val localEnd = result.lineLocalEnd.coerceIn(0, length)
-                if (localStart < localEnd) {
-                    val isCurrent = (i == currentMatchIndex)
-                    val bgColor = if (isCurrent) activeHighlightColor else normalHighlightColor
-                    addStyle(
-                        SpanStyle(background = bgColor),
-                        localStart,
-                        localEnd
-                    )
-                }
+            val localStart = result.docOffset.coerceIn(0, length)
+            val localEnd = (result.docOffset + result.matchLength).coerceIn(0, length)
+            if (localStart < localEnd) {
+                val isCurrent = (i == currentMatchIndex)
+                val bgColor = if (isCurrent) activeHighlightColor else normalHighlightColor
+                addStyle(
+                    SpanStyle(background = bgColor),
+                    localStart,
+                    localEnd
+                )
             }
         }
     }

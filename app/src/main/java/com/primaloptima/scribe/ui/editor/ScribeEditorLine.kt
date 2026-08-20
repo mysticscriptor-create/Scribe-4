@@ -92,7 +92,6 @@ fun ScribeEditorLine(
     val outputTransformation = remember(lineIndex, engine, colorScheme, typography) {
         ScribeOutputTransformation(
             engine = engine,
-            lineIndex = lineIndex,
             colorScheme = colorScheme,
             typography = typography
         )
