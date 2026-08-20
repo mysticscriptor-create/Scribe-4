@@ -38,6 +38,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.primaloptima.scribe.R
 import com.primaloptima.scribe.data.Note
 import com.primaloptima.scribe.data.WorldEntry
+import com.primaloptima.scribe.engine.ProseAnalysisResult
 import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
 import com.primaloptima.scribe.ui.theme.frostedBar
 import com.primaloptima.scribe.ui.theme.frostedCard
@@ -57,6 +58,7 @@ fun EditorRightPanel(
     allNotes            : List<Note>,
     worldEntries        : List<WorldEntry>,
     outline             : List<OutlineEntry>,
+    analysis            : ProseAnalysisResult = ProseAnalysisResult(),
     activeTheme         : AppTheme?,
     onOutlineClick      : (OutlineEntry) -> Unit = {},
     tabBarAtBottom      : Boolean,
@@ -90,8 +92,9 @@ fun EditorRightPanel(
             modifier = Modifier.padding(3.dp)
         ) {
             Row(modifier = Modifier.padding(3.dp)) {
-                PillTab(label = "Pinned",  selected = rightPanelTab == 0, onClick = { onTabChange(0) })
-                PillTab(label = "Outline", selected = rightPanelTab == 1, onClick = { onTabChange(1) })
+                PillTab(label = "Pinned",   selected = rightPanelTab == 0, onClick = { onTabChange(0) })
+                PillTab(label = "Outline",  selected = rightPanelTab == 1, onClick = { onTabChange(1) })
+                PillTab(label = "Analysis", selected = rightPanelTab == 2, onClick = { onTabChange(2) })
             }
         }
     }
@@ -352,6 +355,13 @@ fun EditorRightPanel(
                                     }
                                 }
                             }
+                        }
+                        2 -> {
+                            ProseAnalysisView(
+                                analysis = analysis,
+                                hazeState = hazeState,
+                                modifier = Modifier.fillMaxSize()
+                            )
                         }
                     }
                 }

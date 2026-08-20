@@ -251,9 +251,10 @@ fun MainEditorScreen(
 
     // ── Scribe Compose Editor Engine state ────────────────────────────────────
     val engine = remember { ScribeEditorEngine(initialContent = activeNote?.content ?: "") }
-    val wordCount by engine.wordCount.collectAsStateWithLifecycle()
-    val charCount by engine.charCount.collectAsStateWithLifecycle()
-    val outline   by engine.outline.collectAsStateWithLifecycle()
+    val wordCount     by engine.wordCount.collectAsStateWithLifecycle()
+    val charCount     by engine.charCount.collectAsStateWithLifecycle()
+    val outline       by engine.outline.collectAsStateWithLifecycle()
+    val proseAnalysis by engine.proseAnalysis.collectAsStateWithLifecycle()
 
     var pillMode     by remember { mutableIntStateOf(0) }
     var pillOffsetX  by remember { mutableFloatStateOf(0f) }
@@ -542,6 +543,7 @@ fun MainEditorScreen(
                     allNotes              = allNotes,
                     worldEntries          = worldEntries,
                     outline               = outline,
+                    analysis              = proseAnalysis,
                     activeTheme           = activeTheme,
                     onOutlineClick        = { entry ->
                         engine.requestLineFocus(entry.lineIndex)

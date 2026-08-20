@@ -82,6 +82,9 @@ class ScribeEditorEngine(
     private val _outline = MutableStateFlow<List<OutlineEntry>>(emptyList())
     val outline: StateFlow<List<OutlineEntry>> = _outline.asStateFlow()
 
+    private val _proseAnalysis = MutableStateFlow(ProseAnalysisResult())
+    val proseAnalysis: StateFlow<ProseAnalysisResult> = _proseAnalysis.asStateFlow()
+
     // Mutation stream for debounced calculations
     private val mutationEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
@@ -100,6 +103,7 @@ class ScribeEditorEngine(
         _wordCount.value = countWords(initialText)
         _charCount.value = initialText.length
         extractOutlineAsync(initialText)
+        runProseAnalysisAsync(initialText)
 
         // 1. Debounced word and char count computation
         mutationEvents
@@ -123,6 +127,25 @@ class ScribeEditorEngine(
             }
             .flowOn(Dispatchers.Default)
             .launchIn(viewModelScope)
+
+        // 3. Debounced deep prose analysis on worker coroutines
+        mutationEvents
+            .debounce(600)
+            .onEach {
+                val snapshot = buffer.asString()
+                runProseAnalysisAsync(snapshot)
+            }
+            .flowOn(Dispatchers.Default)
+            .launchIn(viewModelScope)
+    }
+
+    private fun runProseAnalysisAsync(text: String) {
+        viewModelScope.launch(Dispatchers.Default) {
+            val result = ProseAnalysisEngine.analyze(text)
+            withContext(Dispatchers.Main) {
+                _proseAnalysis.value = result
+            }
+        }
     }
 
     fun notifyMutation() {
