@@ -102,6 +102,7 @@ import com.primaloptima.scribe.engine.toSerializedDocument
 import com.primaloptima.scribe.ui.editor.ScribeEditor
 import com.primaloptima.scribe.ui.theme.FontHelper
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 
 private enum class PanelState { LeftOpen, Center, RightOpen }
@@ -189,9 +190,9 @@ fun MainEditorScreen(
 
     // ── ViewModel state ───────────────────────────────────────────────────────
     val activeNote     by editorVm.activeNote.collectAsStateWithLifecycle()
-    val wordCount      by editorVm.wordCount.collectAsStateWithLifecycle()
-    val charCount      by editorVm.charCount.collectAsStateWithLifecycle()
-    val outline        by editorVm.outline.collectAsStateWithLifecycle()
+    val vmWordCount    by editorVm.wordCount.collectAsStateWithLifecycle()
+    val vmCharCount    by editorVm.charCount.collectAsStateWithLifecycle()
+    val vmOutline      by editorVm.outline.collectAsStateWithLifecycle()
     val zenMode        by editorVm.zenMode.collectAsStateWithLifecycle()
     val activeTheme    by editorVm.theme.collectAsStateWithLifecycle()
     val goalProgress   by editorVm.goalProgress.collectAsStateWithLifecycle()
@@ -249,6 +250,9 @@ fun MainEditorScreen(
 
     // ── Scribe Compose Editor Engine state ────────────────────────────────────
     val engine = remember { ScribeEditorEngine(initialContent = activeNote?.content ?: "") }
+    val wordCount by engine.wordCount.collectAsStateWithLifecycle()
+    val charCount by engine.charCount.collectAsStateWithLifecycle()
+    val outline   by engine.outline.collectAsStateWithLifecycle()
 
     var pillMode     by remember { mutableIntStateOf(0) }
     var pillOffsetX  by remember { mutableFloatStateOf(0f) }
@@ -291,8 +295,9 @@ fun MainEditorScreen(
 
     // Debounced sync of engine text back to EditorViewModel
     LaunchedEffect(engine) {
-        snapshotFlow { engine.exportPlainText() }
-            .debounce(500)
+        snapshotFlow { engine.textFieldState.text.toString() }
+            .debounce(400)
+            .distinctUntilChanged()
             .collect { text ->
                 editorVm.onContentChanged(text)
             }

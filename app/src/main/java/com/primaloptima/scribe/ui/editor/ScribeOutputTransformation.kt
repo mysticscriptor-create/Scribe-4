@@ -11,18 +11,14 @@ import com.primaloptima.scribe.engine.ScribeEditorEngine
 import com.primaloptima.scribe.engine.toSpanStyle
 
 /**
- * OutputTransformation scoped to a single paragraph/line.
- *
- * [lineDocStart] and [lineDocEnd] are the global document character positions
- * of this paragraph (not including the trailing newline). Only spans and search
- * results that overlap this range are applied, translated to local coordinates.
+ * High-performance OutputTransformation for Compose 1.12 BasicTextField.
+ * Applies rich prose styles (Bold, Italic, Underline, Headings, Quotes) and
+ * live search match highlights without mutating the underlying TextFieldState.
  */
 class ScribeOutputTransformation(
     private val engine: ScribeEditorEngine,
     private val colorScheme: ColorScheme,
     private val typography: Typography,
-    private val lineDocStart: Int = 0,
-    private val lineDocEnd: Int = Int.MAX_VALUE,
     private val activeHighlightColor: Color = Color(0xFFFFD54F),
     private val normalHighlightColor: Color = Color(0x66FFE082)
 ) : OutputTransformation {
@@ -30,34 +26,25 @@ class ScribeOutputTransformation(
     override fun TextFieldBuffer.transformOutput() {
         if (length == 0) return
 
-        // 1. Apply prose formatting spans (only those overlapping this line)
-        val spans = engine.formats.exportAll()
+        // 1. Apply prose formatting spans
+        val spans = engine.formats.spansIn(0, length)
         for (span in spans) {
-            // Skip spans that don't overlap this paragraph
-            if (span.end <= lineDocStart || span.start >= lineDocEnd) continue
-
-            // Translate to local (paragraph-relative) coordinates
-            val localStart = (span.start - lineDocStart).coerceIn(0, length)
-            val localEnd = (span.end - lineDocStart).coerceIn(0, length)
+            val localStart = span.start.coerceIn(0, length)
+            val localEnd = span.end.coerceIn(0, length)
             if (localStart < localEnd) {
                 val spanStyle = span.type.toSpanStyle(colorScheme, typography)
                 addStyle(spanStyle, localStart, localEnd)
             }
         }
 
-        // 2. Apply search result highlights (only those overlapping this line)
+        // 2. Apply search result highlights
         val searchResults = engine.searchEngine.results
         val currentMatchIndex = engine.searchEngine.currentIndex
 
         for (i in searchResults.indices) {
             val result = searchResults[i]
-            val resultEnd = result.docOffset + result.matchLength
-
-            // Skip results that don't overlap this paragraph
-            if (resultEnd <= lineDocStart || result.docOffset >= lineDocEnd) continue
-
-            val localStart = (result.docOffset - lineDocStart).coerceIn(0, length)
-            val localEnd = (resultEnd - lineDocStart).coerceIn(0, length)
+            val localStart = result.docOffset.coerceIn(0, length)
+            val localEnd = (result.docOffset + result.matchLength).coerceIn(0, length)
             if (localStart < localEnd) {
                 val isCurrent = (i == currentMatchIndex)
                 val bgColor = if (isCurrent) activeHighlightColor else normalHighlightColor
@@ -66,3 +53,4 @@ class ScribeOutputTransformation(
         }
     }
 }
+
