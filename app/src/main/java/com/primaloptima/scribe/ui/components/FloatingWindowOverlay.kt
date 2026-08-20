@@ -22,12 +22,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import com.primaloptima.scribe.data.Note
-import com.primaloptima.scribe.ui.theme.ScribeColorScheme
 import com.primaloptima.scribe.util.model.AppTheme
 import com.primaloptima.scribe.util.model.FloatingWindow
-import io.github.rosemoe.sora.widget.CodeEditor
 import kotlin.math.roundToInt
 
 @Composable
@@ -142,29 +141,20 @@ private fun FloatingWindowItem(
             }
 
             if (!windowState.collapsed) {
-                // Read-only Sora viewer — matches the main editor's rendering
-                // without syntax highlighting or line numbers.
-                AndroidView(
+                Box(
                     modifier = Modifier
                         .heightIn(min = 100.dp, max = 220.dp)
-                        .fillMaxWidth(),
-                    factory = { ctx ->
-                        CodeEditor(ctx).apply {
-                            isEditable             = false
-                            isLineNumberEnabled    = false
-                            isHighlightCurrentLine = false
-                            isWordwrap             = true
-                            setText(note.content.ifBlank { "Empty note" })
-                            activeTheme?.let { colorScheme = ScribeColorScheme(it) }
-                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                        }
-                    },
-                    update = { editor ->
-                        val incoming = note.content.ifBlank { "Empty note" }
-                        if (editor.text.toString() != incoming) editor.setText(incoming)
-                        activeTheme?.let { editor.colorScheme = ScribeColorScheme(it) }
-                    }
-                )
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = note.content.ifBlank { "Empty note" },
+                        fontSize = (activeTheme?.fontSize ?: 16).sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 22.sp
+                    )
+                }
             }
         }
     }

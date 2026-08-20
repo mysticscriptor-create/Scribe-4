@@ -36,13 +36,11 @@ import com.primaloptima.scribe.R
 import com.primaloptima.scribe.data.Note
 import com.primaloptima.scribe.data.WorldEntry
 import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
-import com.primaloptima.scribe.ui.theme.ScribeColorScheme
 import com.primaloptima.scribe.ui.theme.frostedBar
 import com.primaloptima.scribe.ui.theme.frostedCard
 import com.primaloptima.scribe.ui.theme.frostedPanel
 import com.primaloptima.scribe.util.model.AppTheme
 import com.primaloptima.scribe.util.model.OutlineEntry
-import io.github.rosemoe.sora.widget.CodeEditor
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -57,7 +55,7 @@ fun EditorRightPanel(
     worldEntries        : List<WorldEntry>,
     outline             : List<OutlineEntry>,
     activeTheme         : AppTheme?,
-    soraEditorRef       : CodeEditor?,
+    onOutlineClick      : (OutlineEntry) -> Unit = {},
     tabBarAtBottom      : Boolean,
     splitHorizontal     : Boolean,
     onToggleTabBarPos   : () -> Unit,
@@ -306,15 +304,7 @@ fun EditorRightPanel(
                                                     else Color.Transparent
                                                 )
                                                 .clickable {
-                                                    soraEditorRef?.let { editor ->
-                                                        val pos = editor.text.toString().indexOf(entry.text)
-                                                        if (pos >= 0) {
-                                                            val line = editor.text.indexer.getCharLine(pos)
-                                                            val col  = editor.text.indexer.getCharColumn(pos)
-                                                            editor.cursor.set(line, col)
-                                                            editor.ensurePositionVisible(line, col)
-                                                        }
-                                                    }
+                                                    onOutlineClick(entry)
                                                     onClose()
                                                 }
                                                 .padding(
@@ -604,25 +594,20 @@ private fun PinnedNoteSlot(
                     color    = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                 )
 
-                AndroidView(
-                    modifier = Modifier.weight(1f).fillMaxWidth().padding(bottom = 2.dp),
-                    factory  = { ctx ->
-                        CodeEditor(ctx).apply {
-                            isEditable             = false
-                            isLineNumberEnabled    = false
-                            isHighlightCurrentLine = false
-                            isWordwrap             = true
-                            setText(currentNote.content.ifBlank { "(Empty note content)" })
-                            activeTheme?.let { colorScheme = ScribeColorScheme(it) }
-                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                        }
-                    },
-                    update = { editor ->
-                        val incoming = currentNote.content.ifBlank { "(Empty note content)" }
-                        if (editor.text.toString() != incoming) editor.setText(incoming)
-                        activeTheme?.let { editor.colorScheme = ScribeColorScheme(it) }
-                    }
-                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .androidx.compose.foundation.verticalScroll(androidx.compose.foundation.rememberScrollState())
+                ) {
+                    Text(
+                        text = currentNote.content.ifBlank { "(Empty note content)" },
+                        fontSize = (activeTheme?.fontSize ?: 16).sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 22.sp
+                    )
+                }
             }
         }
     }

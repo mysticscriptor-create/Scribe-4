@@ -35,7 +35,8 @@ data class Note(
     /** Non-null when this note is backed by a SAF document URI. */
     @ColumnInfo(name = "external_uri") val externalUri: String? = null,
     /** True once the SAF file content has been read from disk. */
-    val loaded: Boolean = true
+    val loaded: Boolean = true,
+    @ColumnInfo(name = "formats_json") val formatsJson: String? = null
 ) {
     companion object {
         const val DEFAULT_BOOK_ID = "default"

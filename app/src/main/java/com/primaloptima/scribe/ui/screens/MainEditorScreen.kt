@@ -57,7 +57,6 @@ import com.primaloptima.scribe.ui.theme.frostedPanel
 import com.primaloptima.scribe.ui.theme.FrostedDialog
 import com.primaloptima.scribe.ui.theme.frostedContainerColor
 import com.primaloptima.scribe.ui.theme.LocalAppTheme
-import com.primaloptima.scribe.ui.theme.ScribeColorScheme
 import com.primaloptima.scribe.util.BitmapBlur
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -96,15 +95,13 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.Velocity
 
-// ── Sora Editor imports ───────────────────────────────────────────────────────
-import androidx.compose.ui.viewinterop.AndroidView
-import io.github.rosemoe.sora.widget.CodeEditor
-import io.github.rosemoe.sora.widget.EditorSearcher
-import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
-import io.github.rosemoe.sora.event.ContentChangeEvent
-import io.github.rosemoe.sora.event.EditorKeyEvent
-import com.primaloptima.scribe.util.ScribeProseLanguage
-import com.primaloptima.scribe.util.ThemeManager
+// ── Scribe Pure Compose Editor Engine imports ────────────────────────────────
+import com.primaloptima.scribe.engine.FormatType
+import com.primaloptima.scribe.engine.ScribeEditorEngine
+import com.primaloptima.scribe.engine.toSerializedDocument
+import com.primaloptima.scribe.ui.editor.ScribeEditor
+import com.primaloptima.scribe.ui.theme.FontHelper
+import kotlinx.coroutines.flow.debounce
 
 
 private enum class PanelState { LeftOpen, Center, RightOpen }
@@ -250,9 +247,8 @@ fun MainEditorScreen(
         openDialog()
     }
 
-    // ── Sora CodeEditor state ─────────────────────────────────────────────────
-    var soraEditorRef  by remember { mutableStateOf<CodeEditor?>(null) }
-    var loadedNoteId   by rememberSaveable { mutableStateOf<String?>(null) }
+    // ── Scribe Compose Editor Engine state ────────────────────────────────────
+    val engine = remember { ScribeEditorEngine(initialContent = activeNote?.content ?: "") }
 
     var pillMode     by remember { mutableIntStateOf(0) }
     var pillOffsetX  by remember { mutableFloatStateOf(0f) }
@@ -286,49 +282,26 @@ fun MainEditorScreen(
         else if (currentBookNotes.isNotEmpty()) editorVm.loadNote(currentBookNotes.first().id)
     }
 
-    // FIX 3: Removed activeNote?.content from the LaunchedEffect key.
-    // Previously keying on content meant this effect was cancelled and re-launched on
-    // every keystroke (content changes → ViewModel emits → new content value → effect restarts).
-    // The guard condition `editor.text.length == 0 && note.content.isNotEmpty()` already
-    // handles the edge case of an editor that exists but hasn't been filled yet.
-    // Keying only on id + soraEditorRef is sufficient and far cheaper.
-    LaunchedEffect(activeNote?.id, soraEditorRef) {
-        val note   = activeNote ?: return@LaunchedEffect
-        val editor = soraEditorRef ?: return@LaunchedEffect
-        if (loadedNoteId != note.id || (editor.text.length == 0 && note.content.isNotEmpty())) {
-            loadedNoteId = note.id
-            editor.setText(note.content)
+    // Load active note into Scribe engine
+    LaunchedEffect(activeNote?.id) {
+        activeNote?.let { note ->
+            engine.loadDocument(note.toSerializedDocument())
         }
     }
 
-    // ── Fix 2: Dismiss Sora's text-action popup when a panel opens ────────────
-    // Placed here — after soraEditorRef is declared — so the lambda can reference it.
-    // LaunchedEffect is keyed on isPanelOpen (a derived Boolean from targetValue), so it
-    // fires as soon as a panel swipe commits. It clears the selection and calls dismiss()
-    // so the EditorTextActionWindow PopupWindow never renders over the panel UI.
-    val isPanelOpen = isLeftDrawerOpen || isRightPanelOpen
-    LaunchedEffect(isPanelOpen) {
-        if (isPanelOpen) {
-            soraEditorRef?.let { editor ->
-                // Clear text selection so the popup has no reason to reappear.
-                if (editor.cursor.isSelected) {
-                    editor.setSelection(editor.cursor.leftLine, editor.cursor.leftColumn)
-                }
-                // Dismiss the action window (no-op if already disabled, safe to call).
-                try {
-                    editor.getComponent(
-                        io.github.rosemoe.sora.widget.component.EditorTextActionWindow::class.java
-                    ).dismiss()
-                } catch (_: Exception) { }
+    // Debounced sync of engine text back to EditorViewModel
+    LaunchedEffect(engine) {
+        snapshotFlow { engine.exportPlainText() }
+            .debounce(500)
+            .collect { text ->
+                editorVm.onContentChanged(text)
             }
-        }
     }
 
-    val soraEditorForDispose = soraEditorRef
     DisposableEffect(activeNote?.id) {
         onDispose {
             activeNote?.let {
-                editorVm.saveVersionSnapshotOnLeave(soraEditorForDispose?.text?.toString() ?: "")
+                editorVm.saveVersionSnapshotOnLeave(engine.exportPlainText())
             }
         }
     }
@@ -413,19 +386,19 @@ fun MainEditorScreen(
                             zenMode           = zenMode,
                             goalProgress      = goalProgress,
                             isLeftDrawerOpen  = isLeftDrawerOpen,
-                            soraEditorRef     = soraEditorRef,
                             onNavClick        = { scope.launch { panelState.animateTo(if (isLeftDrawerOpen) PanelState.Center else PanelState.LeftOpen) } },
                             onTitleClick      = { if (activeNote != null) scope.launch { captureForDialog { showRenameDialog = true } } },
                             onOpenRightPanel  = { scope.launch { panelState.animateTo(PanelState.RightOpen) } },
                             onToggleFind      = { showFindBar = !showFindBar },
                             onSaveCheckpoint  = {
-                                editorVm.saveManualSnapshot(soraEditorRef?.text?.toString() ?: "")
+                                engine.saveSnapshot("Manual Checkpoint")
+                                editorVm.saveManualSnapshot(engine.exportPlainText())
                                 Toast.makeText(context, "Checkpoint saved", Toast.LENGTH_SHORT).show()
                             },
                             onEnterZen        = { editorVm.setZen(true) },
                             onOpenFloating    = { activeNote?.let { editorVm.openFloatingWindow(it.id) } },
                             onExport          = { fmt -> activeNote?.let { ExportHelper.shareNote(context, it, fmt) } },
-                            onVersionHistory  = { editorVm.flushContent(soraEditorRef?.text?.toString() ?: ""); onOpenHistory() },
+                            onVersionHistory  = { editorVm.flushContent(engine.exportPlainText()); onOpenHistory() },
                             onShortcuts       = onOpenShortcuts,
                             onGuide           = onOpenGuide,
                             onSettings        = onOpenSettings,
@@ -433,7 +406,7 @@ fun MainEditorScreen(
                     },
                     bottomBar = {
                         // FIX 5: Removed the shadowed isKeyboardVisible redeclaration that was
-                        // inside bottomBar. Now uses the one declared at screen scope (line ~274).
+                        // inside bottomBar. Now uses the one declared at screen scope.
                         CompositionLocalProvider(LocalOneShotBitmap provides barBlurBitmap) {
                             AnimatedVisibility(
                                 visible = isKeyboardVisible,
@@ -453,9 +426,9 @@ fun MainEditorScreen(
                                     shortcuts.forEach { shortcut ->
                                         FormatButton(label = shortcut.label) {
                                             when (shortcut.kind) {
-                                                "wrap" -> soraEditorRef?.applyFormat(shortcut.payload, shortcut.closing ?: shortcut.payload)
-                                                "pair" -> soraEditorRef?.applyFormat(shortcut.payload, shortcut.closing ?: "")
-                                                else   -> soraEditorRef?.insertAtCursor(shortcut.payload)
+                                                "wrap" -> engine.applyFormatWrap(0, 0, 0, shortcut.payload, shortcut.closing ?: shortcut.payload)
+                                                "pair" -> engine.applyFormatWrap(0, 0, 0, shortcut.payload, shortcut.closing ?: "")
+                                                else   -> engine.insertAtCursor(0, 0, shortcut.payload)
                                             }
                                         }
                                     }
@@ -472,163 +445,52 @@ fun MainEditorScreen(
                                 visible       = showFindBar,
                                 findQuery     = findQuery,
                                 replaceQuery  = replaceQuery,
-                                onFindChange  = { findQuery = it },
+                                onFindChange  = {
+                                    findQuery = it
+                                    engine.searchEngine.search(it)
+                                },
                                 onReplaceChange = { replaceQuery = it },
-                                onPrevious    = { soraEditorRef?.searcher?.gotoPrevious() },
-                                onNext        = { soraEditorRef?.searcher?.gotoNext() },
-                                onReplaceAll  = {
-                                    val editor = soraEditorRef ?: return@FindReplaceBar
-                                    if (findQuery.isNotEmpty()) {
-                                        editor.searcher.replaceAll(replaceQuery)
-                                        editorVm.onContentChanged(editor.text.toString())
+                                onPrevious    = {
+                                    engine.searchEngine.goToPrevious()?.let { match ->
+                                        engine.requestLineFocus(match.lineIndex)
                                     }
                                 },
-                                onClose       = { showFindBar = false }
+                                onNext        = {
+                                    engine.searchEngine.goToNext()?.let { match ->
+                                        engine.requestLineFocus(match.lineIndex)
+                                    }
+                                },
+                                onReplaceAll  = {
+                                    if (findQuery.isNotEmpty()) {
+                                        engine.searchEngine.replaceAll(replaceQuery)
+                                        editorVm.onContentChanged(engine.exportPlainText())
+                                    }
+                                },
+                                onClose       = {
+                                    showFindBar = false
+                                    engine.searchEngine.clear()
+                                }
                             )
 
-                            // Drive Sora's searcher from find state
-                            LaunchedEffect(findQuery, showFindBar) {
-                                val editor = soraEditorRef ?: return@LaunchedEffect
-                                if (showFindBar && findQuery.isNotEmpty()) {
-                                    editor.searcher.search(findQuery, EditorSearcher.SearchOptions(true, false))
-                                } else {
-                                    editor.searcher.stopSearch()
-                                }
+                            // ── Pure Compose Scribe Editor ────────────────────
+                            val editorFontFamily = remember(activeTheme?.fontFamily) {
+                                FontHelper.getFontFamily(activeTheme?.fontFamily ?: "default")
                             }
-
-                            // ── Sora CodeEditor ───────────────────────────────
-                            // FIX 6: Extracted expensive theme-derived values that were being
-                            // recomputed inside the AndroidView update block. These are now
-                            // stable remembered values, so the update block only runs when
-                            // activeTheme actually changes — not on every recomposition.
-                            val hasBgImageLocal     = !activeTheme?.backgroundImageUri.isNullOrEmpty()
-                            val currentThemeBg      = MaterialTheme.colorScheme.background
-                            val editorTextSizeSp    = remember(activeTheme?.fontSize) {
-                                (activeTheme?.fontSize ?: 18).toFloat()
-                            }
-                            val editorTypeface      = remember(activeTheme?.fontFamily) {
-                                activeTheme?.fontFamily?.let { ThemeManager.resolveTypeface(context, it) }
-                            }
-                            val bgArgb              = remember(hasBgImageLocal, currentThemeBg) {
-                                if (hasBgImageLocal) android.graphics.Color.TRANSPARENT
-                                else currentThemeBg.toArgb()
-                            }
-                            // FIX 6 cont: The popup background drawables are expensive to
-                            // build (GradientDrawable + LayerDrawable + reflection walk).
-                            // Cache them keyed on the two colors that drive them so they
-                            // are only rebuilt when the theme's accent/surface actually changes.
-                            val popupBgDrawable = remember(activeTheme?.colors?.accent, activeTheme?.colors?.surface) {
-                                val density    = context.resources.displayMetrics.density
-                                val cornerPx   = 24f * density
-                                val accentHex  = activeTheme?.colors?.accent ?: "#000000"
-                                val surfaceHex = activeTheme?.colors?.surface ?: "#FFFFFF"
-                                val accentArgb  = runCatching { android.graphics.Color.parseColor(accentHex) }.getOrDefault(android.graphics.Color.BLACK)
-                                val surfaceArgb = runCatching { android.graphics.Color.parseColor(surfaceHex) }.getOrDefault(android.graphics.Color.WHITE)
-                                val fill = android.graphics.drawable.GradientDrawable().apply {
-                                    setColor(surfaceArgb); cornerRadius = cornerPx
-                                }
-                                val overlay = android.graphics.drawable.GradientDrawable(
-                                    android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
-                                    intArrayOf(
-                                        android.graphics.Color.argb(
-                                            71,
-                                            android.graphics.Color.red(accentArgb),
-                                            android.graphics.Color.green(accentArgb),
-                                            android.graphics.Color.blue(accentArgb)
-                                        ),
-                                        android.graphics.Color.TRANSPARENT
-                                    )
-                                ).apply { cornerRadius = cornerPx }
-                                android.graphics.drawable.LayerDrawable(arrayOf(fill, overlay))
-                            }
+                            val editorFontSizeSp = (activeTheme?.fontSize ?: 18).sp
+                            val editorTextColor = parseComposeColor(
+                                activeTheme?.colors?.text ?: "#000000",
+                                MaterialTheme.colorScheme.onBackground
+                            )
 
                             Box(Modifier.fillMaxSize()) {
-                                AndroidView(
-                                    factory = { ctx ->
-                                        CodeEditor(ctx).apply {
-                                            isLineNumberEnabled    = false
-                                            isHighlightCurrentLine = false
-                                            isWordwrap             = true
-                                            setEditorLanguage(ScribeProseLanguage())
-
-                                            // Fix 3a: Allow Sora's scroll events to bubble up
-                                            // through the Compose nestedScroll chain so the
-                                            // NestedScrollConnection on the Layout can receive them.
-                                            isNestedScrollingEnabled = true
-
-                                            // Fix 3b: Disable the built-in EditorTextActionWindow
-                                            // in the factory (one-time setup) so it never shows.
-                                            // We rely on Fix 2's LaunchedEffect as a safety net for
-                                            // any edge cases, but disabling here is the primary guard.
-                                            try {
-                                                getComponent(
-                                                    io.github.rosemoe.sora.widget.component.EditorTextActionWindow::class.java
-                                                ).isEnabled = false
-                                            } catch (_: Exception) { }
-
-                                            subscribeEvent(ContentChangeEvent::class.java) { _, _ ->
-                                                if (loadedNoteId != null)
-                                                    editorVm.onContentChanged(text.toString())
-                                            }
-                                            subscribeEvent(EditorKeyEvent::class.java) { event, _ ->
-                                                if (event.action != android.view.KeyEvent.ACTION_DOWN) return@subscribeEvent
-                                                if (event.keyCode != android.view.KeyEvent.KEYCODE_ENTER) return@subscribeEvent
-                                                val cur = this.cursor
-                                                if (cur.isSelected) return@subscribeEvent
-                                                val line = this.text.getLine(cur.leftLine)
-                                                val col  = cur.leftColumn
-                                                val closeChars = setOf(')', ']', '}', '`', '"', '\'', '\u201D', '\u2019', '\u00BB')
-                                                if (col < line.length && line[col] in closeChars) {
-                                                    setSelection(cur.leftLine, col + 1)
-                                                    event.intercept()
-                                                }
-                                            }
-                                        }.also { soraEditorRef = it }
-                                    },
-                                    update = { editor ->
-                                        // FIX 6 cont: update block is now cheap — all expensive
-                                        // objects were built in remembered blocks above and are
-                                        // only passed in here. No allocations happen per-frame.
-                                        editor.setTextSize(editorTextSizeSp)
-                                        editorTypeface?.let { editor.typefaceText = it }
-                                        editor.setBackgroundColor(bgArgb)
-                                        activeTheme?.let { theme ->
-                                            val scheme = ScribeColorScheme(theme)
-                                            scheme.setColor(EditorColorScheme.WHOLE_BACKGROUND,       bgArgb)
-                                            scheme.setColor(EditorColorScheme.LINE_NUMBER_BACKGROUND, bgArgb)
-                                            scheme.setColor(EditorColorScheme.LINE_NUMBER,            bgArgb)
-                                            editor.colorScheme = scheme
-                                            // Apply the cached popup background via reflection.
-                                            // The reflection walk only happens here (theme change),
-                                            // not on every recomposition.
-                                            try {
-                                                val aw = editor.getComponent(
-                                                    io.github.rosemoe.sora.widget.component.EditorTextActionWindow::class.java
-                                                )
-                                                var popup: android.widget.PopupWindow? = null
-                                                var cls: Class<*>? = aw.javaClass
-                                                outer@ while (cls != null && cls != Any::class.java) {
-                                                    for (f in cls.declaredFields) {
-                                                        if (android.widget.PopupWindow::class.java.isAssignableFrom(f.type)) {
-                                                            f.isAccessible = true
-                                                            popup = f.get(aw) as? android.widget.PopupWindow
-                                                            break@outer
-                                                        }
-                                                    }
-                                                    cls = cls.superclass
-                                                }
-                                                popup?.setBackgroundDrawable(popupBgDrawable)
-                                            } catch (_: Exception) { }
-                                        }
-                                    },
-                                    // FIX 7: Added onRelease to properly tear down the CodeEditor
-                                    // when it leaves composition. Without this, Sora holds onto
-                                    // language server references, event subscriptions, and internal
-                                    // handlers indefinitely — a genuine resource leak.
-                                    onRelease = { editor ->
-                                        soraEditorRef = null
-                                        editor.release()
-                                    },
+                                ScribeEditor(
+                                    engine = engine,
+                                    textStyle = androidx.compose.ui.text.TextStyle(
+                                        fontFamily = editorFontFamily,
+                                        fontSize = editorFontSizeSp,
+                                        color = editorTextColor
+                                    ),
+                                    cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
                                     modifier = Modifier.fillMaxSize()
                                 )
 
@@ -674,7 +536,9 @@ fun MainEditorScreen(
                     worldEntries          = worldEntries,
                     outline               = outline,
                     activeTheme           = activeTheme,
-                    soraEditorRef         = soraEditorRef,
+                    onOutlineClick        = { entry ->
+                        engine.requestLineFocus(entry.lineIndex)
+                    },
                     tabBarAtBottom        = companionTabBarBottom,
                     splitHorizontal       = companionSplitHorizontal,
                     onToggleTabBarPos     = { editorVm.setCompanionTabBarBottom(!companionTabBarBottom) },
@@ -687,7 +551,6 @@ fun MainEditorScreen(
                     onRemoveTop           = { id -> editorVm.removePinnedTop(id) },
                     onPrevBottom          = { editorVm.prevPinnedBottom() },
                     onNextBottom          = { editorVm.nextPinnedBottom() },
-                    // FIX 8: Was "top" — copy-paste bug. Bottom switch must target "bottom".
                     onSwitchBottom        = { scope.launch { captureForDialog { filePickerTargetSlot = "bottom" } } },
                     onEditBottom          = { id -> editorVm.loadNote(id) },
                     onRemoveBottom        = { id -> editorVm.removePinnedBottom(id) },
@@ -835,7 +698,6 @@ private fun EditorTopBarWithMenu(
     zenMode          : Boolean,
     goalProgress     : Float,
     isLeftDrawerOpen : Boolean,
-    soraEditorRef    : CodeEditor?,
     onNavClick       : () -> Unit,
     onTitleClick     : () -> Unit,
     onOpenRightPanel : () -> Unit,
@@ -1125,38 +987,6 @@ private fun FormatButton(
             Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
     }
-}
-
-// ── CodeEditor extension helpers ──────────────────────────────────────────────
-
-private fun CodeEditor.applyFormat(open: String, close: String) {
-    val cur = cursor
-    if (cur.isSelected) {
-        val indexer  = text.indexer
-        val startIdx = indexer.getCharIndex(cur.leftLine,  cur.leftColumn)
-        val endIdx   = indexer.getCharIndex(cur.rightLine, cur.rightColumn)
-        val selected = text.subSequence(startIdx, endIdx).toString()
-        text.replace(
-            cur.leftLine,  cur.leftColumn,
-            cur.rightLine, cur.rightColumn,
-            "$open$selected$close"
-        )
-    } else {
-        val line = cur.leftLine
-        val col  = cur.leftColumn
-        text.insert(line, col, "$open$close")
-        this.cursor.set(line, col + open.length)
-    }
-}
-
-private fun CodeEditor.applyLinePrefix(prefix: String) {
-    val line = cursor.leftLine
-    text.insert(line, 0, prefix)
-    cursor.set(line, cursor.leftColumn + prefix.length)
-}
-
-private fun CodeEditor.insertAtCursor(str: String) {
-    commitText(str)
 }
 
 private fun parseComposeColor(hex: String, fallback: Color): Color = try {
