@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.rememberBringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
@@ -91,7 +90,7 @@ fun ScribeEditor(
     // One FocusRequester per visible line is too expensive.
     // Use a single one; it always points at the active line's BasicTextField.
     val activeFocusRequester = remember { FocusRequester() }
-    val activeBringIntoViewRequester = rememberBringIntoViewRequester()
+    val activeBringIntoViewRequester = remember { BringIntoViewRequester() }
 
     var showContextMenu by remember { mutableStateOf(false) }
     var contextMenuOffset by remember { mutableStateOf(Offset.Zero) }
@@ -156,7 +155,7 @@ fun ScribeEditor(
                     focusRequester = if (lineIndex == activeLineIndex) activeFocusRequester
                                      else remember { FocusRequester() },
                     bringIntoViewRequester = if (lineIndex == activeLineIndex) activeBringIntoViewRequester
-                                             else rememberBringIntoViewRequester(),
+                                             else remember { BringIntoViewRequester() },
                     isActive = (lineIndex == activeLineIndex),
                     lineDocStart = lineDocStart,
                     modifier = Modifier
