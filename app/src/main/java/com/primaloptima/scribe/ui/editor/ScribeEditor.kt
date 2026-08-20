@@ -6,12 +6,14 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.relocation.rememberBringIntoViewRequester
+import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -52,7 +54,7 @@ fun ScribeEditor(
     // One FocusRequester per visible line is too expensive.
     // Use a single one; it always points at the active line's BasicTextField.
     val activeFocusRequester = remember { FocusRequester() }
-    val activeBringIntoViewRequester = rememberBringIntoViewRequester()
+    val activeBringIntoViewRequester = remember { BringIntoViewRequester() }
 
     // Watch for focus requests from engine (outline jumps, search jumps)
     LaunchedEffect(engine) {
@@ -100,7 +102,7 @@ fun ScribeEditor(
                     focusRequester = if (lineIndex == activeLineIndex) activeFocusRequester
                                      else remember { FocusRequester() },
                     bringIntoViewRequester = if (lineIndex == activeLineIndex) activeBringIntoViewRequester
-                                             else rememberBringIntoViewRequester(),
+                                             else remember { BringIntoViewRequester() },
                     isActive = (lineIndex == activeLineIndex),
                     lineDocStart = lineDocStart,
                     onActivate = {
