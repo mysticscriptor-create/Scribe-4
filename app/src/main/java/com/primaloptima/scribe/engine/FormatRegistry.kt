@@ -2,6 +2,7 @@ package com.primaloptima.scribe.engine
 
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Typography
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -50,7 +51,7 @@ sealed class FormatEdit {
  * Automatically adjusts span boundaries on insertions and deletions.
  */
 class FormatRegistry {
-    private val spans = mutableListOf<FormatSpan>()
+    private val spans = mutableStateListOf<FormatSpan>()
 
     fun exportAll(): List<FormatSpan> = spans.map { it.copy() }
 
@@ -125,11 +126,12 @@ class FormatRegistry {
         if (insertedLength <= 0 || spans.isEmpty()) return
         for (i in 0 until spans.size) {
             val span = spans[i]
-            if (span.start >= pos) {
-                span.start += insertedLength
-                span.end += insertedLength
-            } else if (span.end > pos) {
-                span.end += insertedLength
+            when {
+                span.start >= pos -> spans[i] = span.copy(
+                    start = span.start + insertedLength,
+                    end = span.end + insertedLength
+                )
+                span.end > pos -> spans[i] = span.copy(end = span.end + insertedLength)
             }
         }
     }
@@ -137,35 +139,46 @@ class FormatRegistry {
     fun adjustForDelete(start: Int, deletedLength: Int) {
         if (deletedLength <= 0) return
         val end = start + deletedLength
-        val toRemove = mutableListOf<FormatSpan>()
 
-        for (span in spans) {
-            if (span.start >= end) {
-                // Entirely after deleted range
-                span.start -= deletedLength
-                span.end -= deletedLength
-            } else if (span.end <= start) {
-                // Entirely before deleted range — unchanged
-                continue
-            } else if (span.start >= start && span.end <= end) {
-                // Completely inside deleted range -> mark for removal
-                toRemove.add(span)
-            } else if (span.start < start && span.end > end) {
-                // Straddles the deletion range -> shrink
-                span.end -= deletedLength
-            } else if (span.start < start && span.end <= end) {
-                // Overlaps start of deletion
-                span.end = start
-            } else if (span.start >= start && span.end > end) {
-                // Overlaps end of deletion
-                span.start = start
-                span.end -= deletedLength
+        var i = 0
+        while (i < spans.size) {
+            val span = spans[i]
+            when {
+                span.start >= end -> {
+                    spans[i] = span.copy(
+                        start = span.start - deletedLength,
+                        end = span.end - deletedLength
+                    )
+                    i++
+                }
+                span.end <= start -> i++
+                span.start >= start && span.end <= end -> {
+                    spans.removeAt(i)
+                }
+                span.start < start && span.end > end -> {
+                    spans[i] = span.copy(end = span.end - deletedLength)
+                    i++
+                }
+                span.start < start && span.end <= end -> {
+                    val updated = span.copy(end = start)
+                    if (updated.start >= updated.end && updated.type != FormatType.SCENE_SEPARATOR) {
+                        spans.removeAt(i)
+                    } else {
+                        spans[i] = updated
+                        i++
+                    }
+                }
+                else -> {
+                    val updated = span.copy(start = start, end = span.end - deletedLength)
+                    if (updated.start >= updated.end && updated.type != FormatType.SCENE_SEPARATOR) {
+                        spans.removeAt(i)
+                    } else {
+                        spans[i] = updated
+                        i++
+                    }
+                }
             }
         }
-
-        spans.removeAll(toRemove.toSet())
-        // Clean up empty spans (except SCENE_SEPARATOR)
-        spans.removeAll { it.start >= it.end && it.type != FormatType.SCENE_SEPARATOR }
     }
 
     fun applyFormatEdit(edit: FormatEdit) {

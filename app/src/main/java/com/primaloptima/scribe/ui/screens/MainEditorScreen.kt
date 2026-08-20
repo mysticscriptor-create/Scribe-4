@@ -61,7 +61,6 @@ import com.primaloptima.scribe.util.BitmapBlur
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -387,7 +386,7 @@ fun MainEditorScreen(
                 // Child 1: Main editor (full screen, pushed right when drawer opens)
                 Scaffold(
                     containerColor      = Color.Transparent,
-                    contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.ime),
+                    contentWindowInsets = WindowInsets.systemBars,
                     topBar = {
                         EditorTopBarWithMenu(
                             activeNote        = activeNote,
