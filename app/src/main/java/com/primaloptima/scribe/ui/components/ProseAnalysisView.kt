@@ -25,6 +25,7 @@ import com.primaloptima.scribe.engine.ProseAnalysisResult
 import com.primaloptima.scribe.ui.theme.frostedCard
 import kotlin.math.roundToInt
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ProseAnalysisView(
     analysis: ProseAnalysisResult,
