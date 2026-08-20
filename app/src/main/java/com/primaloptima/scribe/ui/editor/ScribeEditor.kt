@@ -54,9 +54,7 @@ fun ScribeEditor(
     val colorScheme = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
 
-    val docRevision = engine.documentRevision.value
-
-    val outputTransformation = remember(engine, colorScheme, typography, docRevision) {
+    val outputTransformation = remember(engine, colorScheme, typography) {
         ScribeOutputTransformation(
             engine = engine,
             colorScheme = colorScheme,
