@@ -109,7 +109,7 @@ fun ScribeEditor(
     }
 
     // Smart markdown & typography input transformation
-    val inputTransformation = remember { ScribeInputTransformation() }
+    val inputTransformation = ScribeInputTransformation
 
     // Listen for navigation requests (Search jumps, Outline jumps)
     LaunchedEffect(engine) {
