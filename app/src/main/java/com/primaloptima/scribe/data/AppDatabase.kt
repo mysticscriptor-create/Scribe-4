@@ -10,9 +10,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 // Phase 2-A: bumped to version 6 (added indexes on book_id and book_id+folder_path)
 // Stats upgrade: bumped to version 7 (added writing_log table)
 // BookScreen header: bumped to version 8 (added summary + tags columns to books)
+// Rich formatting: bumped to version 9 (added formats_json column to notes)
 @Database(
     entities = [Note::class, Folder::class, WorldEntry::class, Book::class, NoteVersion::class, WritingLog::class],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -175,6 +176,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v8 → v9: add `formats_json` column to notes table for rich format persistence.
+         */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE notes ADD COLUMN formats_json TEXT"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val db = Room.databaseBuilder(
@@ -182,7 +194,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "scribe.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                     .addCallback(object : Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             super.onCreate(db)

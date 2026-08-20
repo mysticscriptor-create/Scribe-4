@@ -7,6 +7,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.foundation.text.input.insert
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 
@@ -21,7 +22,8 @@ object ScribeInputTransformation : InputTransformation {
     override val keyboardOptions: KeyboardOptions = KeyboardOptions(
         capitalization = KeyboardCapitalization.Sentences,
         autoCorrectEnabled = true,
-        keyboardType = KeyboardType.Text
+        keyboardType = KeyboardType.Text,
+        imeAction = ImeAction.Default
     )
 
     override fun TextFieldBuffer.transformInput() {

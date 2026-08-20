@@ -13,7 +13,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
@@ -92,6 +95,7 @@ fun ScribeEditorLine(
     val outputTransformation = remember(lineIndex, engine, colorScheme, typography) {
         ScribeOutputTransformation(
             engine = engine,
+            lineIndex = lineIndex,
             colorScheme = colorScheme,
             typography = typography
         )
@@ -116,11 +120,19 @@ fun ScribeEditorLine(
                 .onPreviewKeyEvent { keyEvent ->
                     handleLineKeyEvent(keyEvent, lineIndex, state, engine)
                 },
-            textStyle = textStyle,
+            textStyle = textStyle.copy(
+                lineHeight = if (textStyle.fontSize.isSp) (textStyle.fontSize.value * 1.55f).sp else textStyle.lineHeight
+            ),
             cursorBrush = cursorBrush,
-            lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = 1),
+            lineLimits = androidx.compose.foundation.text.input.TextFieldLineLimits.MultiLine(minHeightInLines = 1),
             outputTransformation = outputTransformation,
-            inputTransformation = ScribeInputTransformation
+            inputTransformation = ScribeInputTransformation,
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Sentences,
+                autoCorrectEnabled = true,
+                keyboardType = KeyboardType.Text,
+                imeAction = ImeAction.Default
+            )
         )
 
         // Visual Scene Separator ornament when user types --- or ***

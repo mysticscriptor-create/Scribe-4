@@ -15,7 +15,7 @@ android {
 
     defaultConfig {
         applicationId = "com.primaloptima.scribe"
-        minSdk = 23
+        minSdk = 26
         targetSdk = 37
         versionCode = 1
         versionName = "1.0.0"
@@ -88,7 +88,7 @@ android {
 
 dependencies {
     // Jetpack Compose BOM & core dependencies
-    val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
+    val composeBom = platform(libs.androidx.compose.bom)
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
@@ -178,9 +178,6 @@ dependencies {
     // Re-enable both lines when the plugin is re-enabled on a proper machine.)
     // implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     // "baselineProfile"(project(":baselineprofile"))
-
-    // Sora Editor — high-performance text editor (replaces BasicTextField/EditText)
-    implementation(libs.sora.editor)
 
     // Testing
     testImplementation("junit:junit:4.13.2")
