@@ -14,12 +14,14 @@ import androidx.lifecycle.viewModelScope
 import com.primaloptima.scribe.util.model.OutlineEntry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flowOn
@@ -38,11 +40,12 @@ data class LineFocusRequest(
 /**
  * Core ViewModel driving the Scribe Prose Editor Engine.
  *
- * Implements a unified, high-performance editor architecture inspired by Sora Editor:
- * - Single persistent TextFieldState avoiding IME churn, keyboard flickering, and focus drops.
- * - Native continuous multi-line selection spanning arbitrary paragraphs.
- * - Accurate touch-to-character offset resolution.
- * - Background debounced stats, outline trees, and prose analysis.
+ * High-performance 100k+ word lag-free architecture:
+ * - Zero Main-Thread String Allocation during continuous typing.
+ * - Single persistent TextFieldState avoiding IME keyboard lifecycle churn.
+ * - Non-blocking background worker pipelines on Dispatchers.Default for buffer sync,
+ *   word/char counting, outline extraction, and deep prose analytics.
+ * - Fast-path index lookups and localized span transforms.
  */
 @OptIn(FlowPreview::class, ExperimentalFoundationApi::class)
 class ScribeEditorEngine(
@@ -54,7 +57,7 @@ class ScribeEditorEngine(
     val formats = FormatRegistry().also { it.loadAll(initialFormats) }
     val undoStack = UndoManager(limit = 200)
 
-    // ── Unified Text & Selection State ──────────────────────────────────
+    // ── Unified Text & Selection State (Main Thread Text State) ───────────
     val state = TextFieldState(initialContent)
 
     // ── Public Observable State ──────────────────────────────────────────
@@ -97,6 +100,10 @@ class ScribeEditorEngine(
     private val _proseAnalysis = MutableStateFlow(ProseAnalysisResult())
     val proseAnalysis: StateFlow<ProseAnalysisResult> = _proseAnalysis.asStateFlow()
 
+    // Background job trackers to cancel stale computations on rapid typing
+    private var analysisJob: Job? = null
+    private var outlineJob: Job? = null
+
     // Mutation stream for debounced calculations
     private val mutationEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
@@ -117,56 +124,58 @@ class ScribeEditorEngine(
 
     init {
         // Initial stats
-        val initialText = initialContent
-        _wordCount.value = countWords(initialText)
-        _charCount.value = initialText.length
-        extractOutlineAsync(initialText)
-        runProseAnalysisAsync(initialText)
+        val initialLen = initialContent.length
+        _charCount.value = initialLen
+        _wordCount.value = countWords(initialContent)
+        extractOutlineAsync(initialContent)
+        runProseAnalysisAsync(initialContent)
 
-        // Sync keystrokes from TextFieldState into DocumentBuffer
-        snapshotFlow { state.text.toString() }
+        // 1. Offload heavy DocumentBuffer sync off the main UI typing thread.
+        // Debounce by 150ms so typing 100+ words per minute doesn't block Compose frames.
+        snapshotFlow { state.text }
             .drop(1)
-            .onEach { newText ->
-                syncBufferFromUI(newText)
+            .debounce(150)
+            .onEach { textSnapshot ->
+                withContext(Dispatchers.Default) {
+                    syncBufferFromUI(textSnapshot.toString())
+                }
             }
+            .flowOn(Dispatchers.Default)
             .launchIn(viewModelScope)
 
-        // Sync selection changes to active line and local selection
+        // 2. Selection changes: calculate line index lightly without blocking
         snapshotFlow { state.selection }
             .onEach { sel ->
                 syncSelectionFromUI(sel)
             }
             .launchIn(viewModelScope)
 
-        // 1. Debounced word and char count computation
-        mutationEvents
-            .debounce(250)
-            .onEach {
-                val snapshot = buffer.asString()
-                val words = withContext(Dispatchers.Default) { countWords(snapshot) }
-                val chars = buffer.length()
-                _wordCount.value = words
+        // 3. Debounced word and char count computation on worker threads
+        snapshotFlow { state.text }
+            .debounce(300)
+            .onEach { textSnapshot ->
+                val chars = textSnapshot.length
+                val words = withContext(Dispatchers.Default) { countWords(textSnapshot) }
                 _charCount.value = chars
+                _wordCount.value = words
             }
             .flowOn(Dispatchers.Default)
             .launchIn(viewModelScope)
 
-        // 2. Debounced outline extraction
-        mutationEvents
+        // 4. Debounced outline extraction (500ms debounce on worker thread)
+        snapshotFlow { state.text }
             .debounce(500)
-            .onEach {
-                val snapshot = buffer.asString()
-                extractOutlineAsync(snapshot)
+            .onEach { textSnapshot ->
+                extractOutlineAsync(textSnapshot.toString())
             }
             .flowOn(Dispatchers.Default)
             .launchIn(viewModelScope)
 
-        // 3. Debounced deep prose analysis on worker coroutines
-        mutationEvents
-            .debounce(600)
-            .onEach {
-                val snapshot = buffer.asString()
-                runProseAnalysisAsync(snapshot)
+        // 5. Debounced deep prose analysis on worker thread (700ms debounce)
+        snapshotFlow { state.text }
+            .debounce(700)
+            .onEach { textSnapshot ->
+                runProseAnalysisAsync(textSnapshot.toString())
             }
             .flowOn(Dispatchers.Default)
             .launchIn(viewModelScope)
@@ -200,7 +209,10 @@ class ScribeEditorEngine(
             formats.adjustForInsert(prefix, insertText.length)
         }
 
-        notifyMutation()
+        _lineCount.intValue = buffer.lineCount()
+        _canUndo.value = undoStack.canUndo()
+        _canRedo.value = undoStack.canRedo()
+        _documentRevision.intValue++
     }
 
     private fun syncSelectionFromUI(sel: TextRange) {
@@ -218,7 +230,8 @@ class ScribeEditorEngine(
     }
 
     private fun runProseAnalysisAsync(text: String) {
-        viewModelScope.launch(Dispatchers.Default) {
+        analysisJob?.cancel()
+        analysisJob = viewModelScope.launch(Dispatchers.Default) {
             val result = ProseAnalysisEngine.analyze(text)
             withContext(Dispatchers.Main) {
                 _proseAnalysis.value = result
@@ -517,7 +530,8 @@ class ScribeEditorEngine(
     // ── Internal Helpers ─────────────────────────────────────────────────
 
     private fun extractOutlineAsync(text: String) {
-        viewModelScope.launch(Dispatchers.Default) {
+        outlineJob?.cancel()
+        outlineJob = viewModelScope.launch(Dispatchers.Default) {
             val totalLines = buffer.lineCount()
             val entries = mutableListOf<OutlineEntry>()
 
