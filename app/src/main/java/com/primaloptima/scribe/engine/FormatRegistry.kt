@@ -110,14 +110,21 @@ class FormatRegistry {
     fun spansIn(start: Int, end: Int): List<FormatSpan> {
         val s = minOf(start, end)
         val e = maxOf(start, end)
-        return spans.filter { span ->
-            span.start < e && span.end > s
+        if (spans.isEmpty() || s >= e) return emptyList()
+        val result = ArrayList<FormatSpan>(4)
+        for (i in 0 until spans.size) {
+            val span = spans[i]
+            if (span.start < e && span.end > s) {
+                result.add(span)
+            }
         }
+        return result
     }
 
     fun adjustForInsert(pos: Int, insertedLength: Int) {
-        if (insertedLength <= 0) return
-        for (span in spans) {
+        if (insertedLength <= 0 || spans.isEmpty()) return
+        for (i in 0 until spans.size) {
+            val span = spans[i]
             if (span.start >= pos) {
                 span.start += insertedLength
                 span.end += insertedLength

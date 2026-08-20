@@ -103,11 +103,11 @@ class ScribeEditorEngine(
 
         // 1. Debounced word and char count computation
         mutationEvents
-            .debounce(300)
+            .debounce(250)
             .onEach {
                 val snapshot = buffer.asString()
                 val words = withContext(Dispatchers.Default) { countWords(snapshot) }
-                val chars = snapshot.length
+                val chars = buffer.length()
                 _wordCount.value = words
                 _charCount.value = chars
             }
@@ -544,14 +544,20 @@ class ScribeEditorEngine(
     }
 
     companion object {
-        private val WORD_PATTERN = Pattern.compile("\\b\\w+\\b")
-
-        fun countWords(text: String): Int {
-            if (text.isBlank()) return 0
+        fun countWords(text: CharSequence): Int {
+            if (text.isEmpty()) return 0
             var count = 0
-            val matcher = WORD_PATTERN.matcher(text)
-            while (matcher.find()) {
-                count++
+            var inWord = false
+            for (i in 0 until text.length) {
+                val c = text[i]
+                if (c.isLetterOrDigit()) {
+                    if (!inWord) {
+                        inWord = true
+                        count++
+                    }
+                } else {
+                    inWord = false
+                }
             }
             return count
         }

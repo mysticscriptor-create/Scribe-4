@@ -29,12 +29,12 @@ class DocumentBuffer(initialContent: String = "") {
     private val original: String = initialContent
     private val appendBuf = StringBuilder()
     private val pieces = mutableListOf<Piece>()
+    private var totalLength = 0
     private var nextLineKey = 1L
     private val lineKeys = mutableListOf<Long>()
 
     // Line start index caching
     private var lineStartsCache: IntArray = intArrayOf(0)
-    private var isLineIndexDirty = true
 
     // Piece access locality cache
     private var cachedPieceIndex = 0
@@ -43,6 +43,7 @@ class DocumentBuffer(initialContent: String = "") {
     init {
         if (initialContent.isNotEmpty()) {
             pieces.add(Piece(Source.ORIGINAL, 0, initialContent.length))
+            totalLength = initialContent.length
         }
         rebuildLineIndex()
         repeat(lineStartsCache.size) { lineKeys.add(nextLineKey++) }
@@ -50,16 +51,10 @@ class DocumentBuffer(initialContent: String = "") {
 
     // ── Read operations ──────────────────────────────────────────────────
 
-    fun length(): Int {
-        var total = 0
-        for (i in 0 until pieces.size) {
-            total += pieces[i].length
-        }
-        return total
-    }
+    fun length(): Int = totalLength
 
     fun charAt(pos: Int): Char {
-        require(pos in 0 until length()) { "Index out of bounds: $pos (length: ${length()})" }
+        require(pos in 0 until totalLength) { "Index out of bounds: $pos (length: $totalLength)" }
         val (pieceIndex, localOffset) = findPieceAt(pos)
         val piece = pieces[pieceIndex]
         return when (piece.source) {
@@ -69,9 +64,8 @@ class DocumentBuffer(initialContent: String = "") {
     }
 
     fun substring(start: Int, end: Int): String {
-        val docLen = length()
-        val s = start.coerceIn(0, docLen)
-        val e = end.coerceIn(s, docLen)
+        val s = start.coerceIn(0, totalLength)
+        val e = end.coerceIn(s, totalLength)
         if (s == e) return ""
 
         val sb = StringBuilder(e - s)
@@ -98,8 +92,8 @@ class DocumentBuffer(initialContent: String = "") {
     }
 
     fun asString(): String {
-        if (pieces.isEmpty()) return ""
-        val sb = StringBuilder(length())
+        if (pieces.isEmpty() || totalLength == 0) return ""
+        val sb = StringBuilder(totalLength)
         for (i in 0 until pieces.size) {
             val piece = pieces[i]
             when (piece.source) {
@@ -114,10 +108,8 @@ class DocumentBuffer(initialContent: String = "") {
 
     fun insert(pos: Int, text: String): Edit {
         if (text.isEmpty()) return Edit.Compound(emptyList())
-        val docLen = length()
-        val targetPos = pos.coerceIn(0, docLen)
+        val targetPos = pos.coerceIn(0, totalLength)
         val lineAtInsertion = lineIndexAt(targetPos)
-        val insertedLineCount = text.count { it == '\n' }
 
         val appendStart = appendBuf.length
         appendBuf.append(text)
@@ -127,7 +119,7 @@ class DocumentBuffer(initialContent: String = "") {
             pieces.add(newPiece)
         } else if (targetPos == 0) {
             pieces.add(0, newPiece)
-        } else if (targetPos == docLen) {
+        } else if (targetPos == totalLength) {
             pieces.add(newPiece)
         } else {
             val (pieceIndex, localOffset) = findPieceAt(targetPos)
@@ -147,24 +139,57 @@ class DocumentBuffer(initialContent: String = "") {
             pieces.addAll(pieceIndex, toInsert)
         }
 
-        if (insertedLineCount > 0) {
-            repeat(insertedLineCount) {
-                lineKeys.add(lineAtInsertion + 1, nextLineKey++)
+        totalLength += text.length
+
+        // Find newline offsets within the inserted text
+        val newlinesInText = mutableListOf<Int>()
+        for (idx in 0 until text.length) {
+            if (text[idx] == '\n') {
+                newlinesInText.add(targetPos + idx + 1)
             }
         }
-        invalidateCaches()
+
+        if (newlinesInText.isEmpty()) {
+            // Fast-path: no newlines inserted, shift subsequent line start offsets in-place
+            for (k in (lineAtInsertion + 1) until lineStartsCache.size) {
+                lineStartsCache[k] += text.length
+            }
+        } else {
+            // Newlines inserted: splice into lineStartsCache and lineKeys
+            val oldCache = lineStartsCache
+            val newCache = IntArray(oldCache.size + newlinesInText.size)
+            System.arraycopy(oldCache, 0, newCache, 0, lineAtInsertion + 1)
+
+            for (nlIdx in 0 until newlinesInText.size) {
+                newCache[lineAtInsertion + 1 + nlIdx] = newlinesInText[nlIdx]
+                val keyPos = (lineAtInsertion + 1 + nlIdx).coerceIn(0, lineKeys.size)
+                lineKeys.add(keyPos, nextLineKey++)
+            }
+
+            val remainingCount = oldCache.size - (lineAtInsertion + 1)
+            if (remainingCount > 0) {
+                val destPos = lineAtInsertion + 1 + newlinesInText.size
+                System.arraycopy(oldCache, lineAtInsertion + 1, newCache, destPos, remainingCount)
+                for (k in destPos until newCache.size) {
+                    newCache[k] += text.length
+                }
+            }
+            lineStartsCache = newCache
+        }
+
+        cachedPieceIndex = 0
+        cachedPieceOffset = 0
         return Edit.Insert(targetPos, text.length, text)
     }
 
     fun delete(start: Int, end: Int): Edit {
-        val docLen = length()
-        val s = start.coerceIn(0, docLen)
-        val e = end.coerceIn(s, docLen)
+        val s = start.coerceIn(0, totalLength)
+        val e = end.coerceIn(s, totalLength)
         if (s == e) return Edit.Compound(emptyList())
 
+        val deletedLength = e - s
         val deletedText = substring(s, e)
         val startLine = lineIndexAt(s)
-        val deletedLineCount = deletedText.count { it == '\n' }
         val newPieces = mutableListOf<Piece>()
         var currentDocOffset = 0
 
@@ -173,16 +198,12 @@ class DocumentBuffer(initialContent: String = "") {
             val pieceEnd = currentDocOffset + piece.length
 
             if (pieceEnd <= s || currentDocOffset >= e) {
-                // Piece completely outside the deletion range
                 newPieces.add(piece)
             } else {
-                // Piece overlaps deletion range
                 if (currentDocOffset < s) {
-                    // Retain left part
                     newPieces.add(Piece(piece.source, piece.start, s - currentDocOffset))
                 }
                 if (pieceEnd > e) {
-                    // Retain right part
                     val rightOffset = e - currentDocOffset
                     newPieces.add(
                         Piece(
@@ -198,12 +219,49 @@ class DocumentBuffer(initialContent: String = "") {
 
         pieces.clear()
         pieces.addAll(newPieces)
-        if (deletedLineCount > 0) {
-            repeat(deletedLineCount) {
-                if (startLine + 1 < lineKeys.size) lineKeys.removeAt(startLine + 1)
+        totalLength -= deletedLength
+
+        // Check if any line boundaries were deleted in (s, e]
+        var deletedLineStartsCount = 0
+        val remainingStarts = mutableListOf<Int>()
+        val keptIndices = mutableListOf<Int>()
+
+        for (k in 0 until lineStartsCache.size) {
+            val lineOffset = lineStartsCache[k]
+            if (lineOffset in (s + 1)..e) {
+                deletedLineStartsCount++
+            } else {
+                keptIndices.add(k)
+                if (lineOffset > e) {
+                    remainingStarts.add(lineOffset - deletedLength)
+                } else {
+                    remainingStarts.add(lineOffset)
+                }
             }
         }
-        invalidateCaches()
+
+        if (deletedLineStartsCount == 0) {
+            // Fast-path: no line starts removed, simply shift subsequent line starts in-place
+            for (k in (startLine + 1) until lineStartsCache.size) {
+                lineStartsCache[k] -= deletedLength
+            }
+        } else {
+            // Re-sync lineKeys and lineStartsCache
+            val newKeys = mutableListOf<Long>()
+            for (idx in keptIndices) {
+                if (idx in lineKeys.indices) {
+                    newKeys.add(lineKeys[idx])
+                }
+            }
+            lineKeys.clear()
+            lineKeys.addAll(newKeys)
+            if (lineKeys.isEmpty()) lineKeys.add(nextLineKey++)
+
+            lineStartsCache = if (remainingStarts.isNotEmpty()) remainingStarts.toIntArray() else intArrayOf(0)
+        }
+
+        cachedPieceIndex = 0
+        cachedPieceOffset = 0
 
         return Edit.Delete(s, e, deletedText)
     }
@@ -265,20 +323,15 @@ class DocumentBuffer(initialContent: String = "") {
 
     // ── Line/Paragraph Indexing ──────────────────────────────────────────
 
-    fun lineCount(): Int {
-        ensureLineIndex()
-        return lineStartsCache.size
-    }
+    fun lineCount(): Int = lineStartsCache.size
 
     fun lineStart(lineIndex: Int): Int {
-        ensureLineIndex()
         if (lineIndex <= 0) return 0
-        if (lineIndex >= lineStartsCache.size) return length()
+        if (lineIndex >= lineStartsCache.size) return totalLength
         return lineStartsCache[lineIndex]
     }
 
     fun lineLength(lineIndex: Int): Int {
-        ensureLineIndex()
         if (lineIndex < 0 || lineIndex >= lineStartsCache.size) return 0
         val start = lineStartsCache[lineIndex]
         val end = if (lineIndex + 1 < lineStartsCache.size) {
@@ -286,14 +339,13 @@ class DocumentBuffer(initialContent: String = "") {
             val nextStart = lineStartsCache[lineIndex + 1]
             if (nextStart > start && charAt(nextStart - 1) == '\n') nextStart - 1 else nextStart
         } else {
-            length()
+            totalLength
         }
         return (end - start).coerceAtLeast(0)
     }
 
     fun lineIndexAt(pos: Int): Int {
-        ensureLineIndex()
-        val target = pos.coerceIn(0, length())
+        val target = pos.coerceIn(0, totalLength)
         val search = lineStartsCache.binarySearch(target)
         return if (search >= 0) search else (-search - 2).coerceAtLeast(0)
     }
@@ -303,17 +355,15 @@ class DocumentBuffer(initialContent: String = "") {
      * edits in earlier paragraphs and lets LazyColumn preserve remembered state.
      */
     fun lineKey(lineIndex: Int): Long {
-        ensureLineIndex()
         if (lineIndex !in lineKeys.indices) return Long.MIN_VALUE + lineIndex
         return lineKeys[lineIndex]
     }
 
     fun lineContent(lineIndex: Int): String {
-        ensureLineIndex()
         if (lineIndex < 0 || lineIndex >= lineStartsCache.size) return ""
         val start = lineStartsCache[lineIndex]
-        val nextStart = if (lineIndex + 1 < lineStartsCache.size) lineStartsCache[lineIndex + 1] else length()
-        val end = if (nextStart > start && nextStart <= length() && charAt(nextStart - 1) == '\n') {
+        val nextStart = if (lineIndex + 1 < lineStartsCache.size) lineStartsCache[lineIndex + 1] else totalLength
+        val end = if (nextStart > start && nextStart <= totalLength && charAt(nextStart - 1) == '\n') {
             nextStart - 1
         } else {
             nextStart
@@ -336,18 +386,6 @@ class DocumentBuffer(initialContent: String = "") {
         }
         val lastIdx = (pieces.size - 1).coerceAtLeast(0)
         return Pair(lastIdx, if (pieces.isNotEmpty()) pieces[lastIdx].length else 0)
-    }
-
-    private fun invalidateCaches() {
-        isLineIndexDirty = true
-        cachedPieceIndex = 0
-        cachedPieceOffset = 0
-    }
-
-    private fun ensureLineIndex() {
-        if (isLineIndexDirty) {
-            rebuildLineIndex()
-        }
     }
 
     private fun rebuildLineIndex() {
@@ -374,6 +412,5 @@ class DocumentBuffer(initialContent: String = "") {
             docOffset += piece.length
         }
         lineStartsCache = starts.toIntArray()
-        isLineIndexDirty = false
     }
 }
