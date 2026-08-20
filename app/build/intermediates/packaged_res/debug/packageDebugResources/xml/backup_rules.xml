@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ (API 31+) full-backup rules.
+  Using <include> tags means everything else is excluded by default —
+  no need for explicit <exclude> entries.
+-->
+<full-backup-content>
+    <include domain="database" path="scribe_db" />
+    <include domain="sharedpref" path="scribe_prefs.xml" />
+</full-backup-content>

@@ -1,0 +1,222 @@
+[
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_copy.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_copy.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_settings.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_settings.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_arrow_up.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_arrow_up.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/font_inter.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/font/inter.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_delete.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_delete.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/font_playfair_display.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/font/playfair_display.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_drag.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_drag.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_chevron_right.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_chevron_right.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_photo.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_photo.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_line_spacing.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_line_spacing.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_scribe_splash_mark_vector.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/scribe_splash_mark_vector.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_bg_pinned_slot_gradient.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/bg_pinned_slot_gradient.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/xml_data_extraction_rules.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/xml/data_extraction_rules.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_edit.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_edit.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_close.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_close.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_palette.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_palette.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_flag.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_flag.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/xml_backup_rules.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/xml/backup_rules.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/xml_file_provider_paths.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/xml/file_provider_paths.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_move.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_move.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_sidebar.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_sidebar.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_folder.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_folder.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/font_caveat.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/font/caveat.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_book_placeholder_feather.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_book_placeholder_feather.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_launcher_foreground.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_typewriter.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_typewriter.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_float.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_float.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_arrow_down.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_arrow_down.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_search.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_search.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_duplicate.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_duplicate.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/mipmap-anydpi-v26_ic_launcher_round.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/mipmap-anydpi-v26/ic_launcher_round.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_chevron_left.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_chevron_left.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_scribe_s.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_scribe_s.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_more_vert.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_more_vert.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_quill.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_quill.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/font_cormorant_garamond.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/font/cormorant_garamond.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_add.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_add.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_regex.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_regex.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_cursor_drawable.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/cursor_drawable.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_export.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_export.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/mipmap-anydpi-v26_ic_launcher.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/mipmap-anydpi-v26/ic_launcher.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_gradient_cover_scrim.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/gradient_cover_scrim.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/font_courier_prime.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/font/courier_prime.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_launcher_background.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_launcher_background.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_book_open.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_book_open.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_pin.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_pin.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_scribe_text.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_scribe_text.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_case.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_case.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/font_lora.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/font/lora.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_text_size.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_text_size.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/font_jetbrains_mono.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/font/jetbrains_mono.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_menu.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_menu.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_eye.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_eye.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_ic_arrow_right.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/ic_arrow_right.xml"
+    },
+    {
+        "merged": "com.primaloptima.scribe.app-debug-3:/drawable_bg_find_input.xml.flat",
+        "source": "com.primaloptima.scribe.app-main-5:/drawable/bg_find_input.xml"
+    }
+]

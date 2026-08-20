@@ -15,6 +15,7 @@ import androidx.compose.ui.text.input.KeyboardType
  * - Smart typographical curly quotes: "..." → “...” and '...' → ‘...’
  * - Automatic pairing of brackets and delimiters: (), [], {}, "", '', **, __
  */
+@OptIn(ExperimentalFoundationApi::class)
 object ScribeInputTransformation : InputTransformation {
 
     override val keyboardOptions: KeyboardOptions = KeyboardOptions(

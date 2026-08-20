@@ -1,0 +1,20 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.primaloptima.scribe.app-mergeDebugResources-1:/values-night-v33/values-night-v33.xml",
+            "map": [
+                {
+                    "source": "/opt/gradle/.gradle/caches/9.3.1/transforms/d3b66b2ed32a2ea47a4f2571ccc2e544/transformed/core-splashscreen-1.2.0/res/values-night-v33/values-night-v33.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endLines": "4",
+                        "endColumns": "12",
+                        "endOffsets": "215"
+                    }
+                }
+            ]
+        }
+    ]
+}

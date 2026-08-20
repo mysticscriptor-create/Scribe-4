@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<font-family xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:fontProviderAuthority="com.google.android.gms.fonts"
+    android:fontProviderPackage="com.google.android.gms"
+    android:fontProviderQuery="JetBrains Mono"
+    android:fontProviderCerts="@array/com_google_android_gms_fonts_certs"
+    app:fontProviderAuthority="com.google.android.gms.fonts"
+    app:fontProviderPackage="com.google.android.gms"
+    app:fontProviderQuery="JetBrains Mono"
+    app:fontProviderCerts="@array/com_google_android_gms_fonts_certs">
+
+    <font
+        android:fontWeight="400"
+        android:fontStyle="normal"
+        app:fontWeight="400"
+        app:fontStyle="normal" />
+
+    <font
+        android:fontWeight="500"
+        android:fontStyle="normal"
+        app:fontWeight="500"
+        app:fontStyle="normal" />
+</font-family>

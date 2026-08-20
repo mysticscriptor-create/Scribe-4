@@ -1,7 +1,7 @@
 // Top-level build file. Add configuration options common to all sub-projects/modules here.
 plugins {
-    id("com.android.application") version "9.3.0" apply false
-    id("com.android.test")        version "9.3.0" apply false   // needed by :baselineprofile module
+    id("com.android.application") version "9.1.1" apply false
+    id("com.android.test")        version "9.1.1" apply false   // needed by :baselineprofile module
     id("org.jetbrains.kotlin.android") version "2.4.10" apply false  // needed by :baselineprofile module
     id("org.jetbrains.kotlin.plugin.compose") version "2.4.10" apply false
     id("com.google.devtools.ksp") version "2.3.11" apply false
