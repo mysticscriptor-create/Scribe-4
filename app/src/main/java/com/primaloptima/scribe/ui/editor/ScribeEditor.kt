@@ -85,17 +85,16 @@ fun ScribeEditor(
                 val lineDocStart = remember(lineIndex, engine.documentRevision.value) {
                     engine.buffer.lineStart(lineIndex)
                 }
+                val isLineActive = (lineIndex == activeLineIndex)
 
                 ScribeEditorLine(
                     lineIndex = lineIndex,
                     engine = engine,
                     textStyle = textStyle,
                     cursorBrush = cursorBrush,
-                    focusRequester = if (lineIndex == activeLineIndex) activeFocusRequester
-                                     else remember { FocusRequester() },
-                    bringIntoViewRequester = if (lineIndex == activeLineIndex) activeBringIntoViewRequester
-                                             else remember { BringIntoViewRequester() },
-                    isActive = (lineIndex == activeLineIndex),
+                    focusRequester = activeFocusRequester,
+                    bringIntoViewRequester = activeBringIntoViewRequester,
+                    isActive = isLineActive,
                     lineDocStart = lineDocStart,
                     onActivate = {
                         engine.requestLineFocus(lineIndex)
