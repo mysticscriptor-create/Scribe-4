@@ -29,6 +29,8 @@ class DocumentBuffer(initialContent: String = "") {
     private val original: String = initialContent
     private val appendBuf = StringBuilder()
     private val pieces = mutableListOf<Piece>()
+    private var nextLineKey = 1L
+    private val lineKeys = mutableListOf<Long>()
 
     // Line start index caching
     private var lineStartsCache: IntArray = intArrayOf(0)
@@ -43,6 +45,7 @@ class DocumentBuffer(initialContent: String = "") {
             pieces.add(Piece(Source.ORIGINAL, 0, initialContent.length))
         }
         rebuildLineIndex()
+        repeat(lineStartsCache.size) { lineKeys.add(nextLineKey++) }
     }
 
     // ── Read operations ──────────────────────────────────────────────────
@@ -113,6 +116,8 @@ class DocumentBuffer(initialContent: String = "") {
         if (text.isEmpty()) return Edit.Compound(emptyList())
         val docLen = length()
         val targetPos = pos.coerceIn(0, docLen)
+        val lineAtInsertion = lineIndexAt(targetPos)
+        val insertedLineCount = text.count { it == '\n' }
 
         val appendStart = appendBuf.length
         appendBuf.append(text)
@@ -142,6 +147,11 @@ class DocumentBuffer(initialContent: String = "") {
             pieces.addAll(pieceIndex, toInsert)
         }
 
+        if (insertedLineCount > 0) {
+            repeat(insertedLineCount) {
+                lineKeys.add(lineAtInsertion + 1, nextLineKey++)
+            }
+        }
         invalidateCaches()
         return Edit.Insert(targetPos, text.length, text)
     }
@@ -153,6 +163,8 @@ class DocumentBuffer(initialContent: String = "") {
         if (s == e) return Edit.Compound(emptyList())
 
         val deletedText = substring(s, e)
+        val startLine = lineIndexAt(s)
+        val deletedLineCount = deletedText.count { it == '\n' }
         val newPieces = mutableListOf<Piece>()
         var currentDocOffset = 0
 
@@ -186,6 +198,11 @@ class DocumentBuffer(initialContent: String = "") {
 
         pieces.clear()
         pieces.addAll(newPieces)
+        if (deletedLineCount > 0) {
+            repeat(deletedLineCount) {
+                if (startLine + 1 < lineKeys.size) lineKeys.removeAt(startLine + 1)
+            }
+        }
         invalidateCaches()
 
         return Edit.Delete(s, e, deletedText)
@@ -279,6 +296,16 @@ class DocumentBuffer(initialContent: String = "") {
         val target = pos.coerceIn(0, length())
         val search = lineStartsCache.binarySearch(target)
         return if (search >= 0) search else (-search - 2).coerceAtLeast(0)
+    }
+
+    /**
+     * Stable identity for a logical paragraph. Unlike its index, this survives
+     * edits in earlier paragraphs and lets LazyColumn preserve remembered state.
+     */
+    fun lineKey(lineIndex: Int): Long {
+        ensureLineIndex()
+        if (lineIndex !in lineKeys.indices) return Long.MIN_VALUE + lineIndex
+        return lineKeys[lineIndex]
     }
 
     fun lineContent(lineIndex: Int): String {

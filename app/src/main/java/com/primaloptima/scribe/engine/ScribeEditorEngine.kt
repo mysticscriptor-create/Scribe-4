@@ -105,26 +105,11 @@ class ScribeEditorEngine(
         _charCount.value = initialText.length
         extractOutlineAsync(initialText)
 
-        // 1. Reactive observation of textFieldState typing changes
-        snapshotFlow { textFieldState.text.toString() }
-            .distinctUntilChanged()
-            .onEach { currentText ->
-                // Keep buffer synced with text without destroying state
-                if (buffer.asString() != currentText) {
-                    buffer.delete(0, buffer.length())
-                    if (currentText.isNotEmpty()) {
-                        buffer.insert(0, currentText)
-                    }
-                    notifyMutation()
-                }
-            }
-            .launchIn(viewModelScope)
-
-        // 2. Debounced word and char count computation
-        snapshotFlow { textFieldState.text.toString() }
-            .debounce(250)
-            .distinctUntilChanged()
-            .onEach { snapshot ->
+        // 1. Debounced word and char count computation
+        mutationEvents
+            .debounce(300)
+            .onEach {
+                val snapshot = buffer.asString()
                 val words = withContext(Dispatchers.Default) { countWords(snapshot) }
                 val chars = snapshot.length
                 _wordCount.value = words
@@ -133,11 +118,11 @@ class ScribeEditorEngine(
             .flowOn(Dispatchers.Default)
             .launchIn(viewModelScope)
 
-        // 3. Debounced outline extraction
-        snapshotFlow { textFieldState.text.toString() }
-            .debounce(400)
-            .distinctUntilChanged()
-            .onEach { snapshot ->
+        // 2. Debounced outline extraction
+        mutationEvents
+            .debounce(500)
+            .onEach {
+                val snapshot = buffer.asString()
                 extractOutlineAsync(snapshot)
             }
             .flowOn(Dispatchers.Default)
@@ -152,12 +137,20 @@ class ScribeEditorEngine(
         mutationEvents.tryEmit(Unit)
     }
 
-    fun toggleFormat(type: FormatType) {
-        val s = textFieldState.selection.min.coerceIn(0, textFieldState.text.length)
-        val e = textFieldState.selection.max.coerceIn(0, textFieldState.text.length)
-        toggleFormat(type, s, e)
+    /**
+     * Mirrors the active paragraph's local selection into the document-wide
+     * state used by formatting/search commands. The rendered editor remains
+     * line-scoped, so the offsets are translated exactly once here.
+     */
+    fun updateLineSelection(lineIndex: Int, localStart: Int, localEnd: Int) {
+        val lineStart = buffer.lineStart(lineIndex)
+        val lineLength = buffer.lineLength(lineIndex)
+        val start = (lineStart + localStart.coerceIn(0, lineLength))
+        val end = (lineStart + localEnd.coerceIn(0, lineLength))
+        textFieldState.edit {
+            selection = TextRange(start, end)
+        }
     }
-
 
     private fun onBufferMutatedExternally() {
         notifyMutation()
@@ -173,18 +166,6 @@ class ScribeEditorEngine(
         val oldLength = oldLineText.length
         val newLength = newText.length
         val lineEnd = lineStart + oldLength
-
-        // Update textFieldState
-        val currentFullText = textFieldState.text.toString()
-        if (lineStart <= currentFullText.length) {
-            val safeEnd = minOf(lineEnd, currentFullText.length)
-            val updated = currentFullText.substring(0, lineStart) + newText + currentFullText.substring(safeEnd)
-            if (textFieldState.text.toString() != updated) {
-                textFieldState.edit {
-                    replace(lineStart, safeEnd, newText)
-                }
-            }
-        }
 
         val edit = Edit.Compound(
             listOf(
