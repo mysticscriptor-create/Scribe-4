@@ -11,7 +11,6 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.AnchoredDraggableState
 import androidx.compose.foundation.gestures.DraggableAnchors
 import androidx.compose.foundation.gestures.anchoredDraggable
-import androidx.compose.foundation.gestures.anchoredDraggableFlingBehavior  // FIX 1: new fling import
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -127,20 +126,21 @@ fun MainEditorScreen(
     val scope   = rememberCoroutineScope()
 
     // ── Panel gesture state ───────────────────────────────────────────────────
-    // FIX 1: Migrated away from the deprecated 5-arg AnchoredDraggableState constructor
-    // (deprecated in Compose 1.8). Thresholds and animation specs now live in
-    // anchoredDraggableFlingBehavior() which is passed to Modifier.anchoredDraggable.
+    // NOTE: The 5-arg AnchoredDraggableState constructor is deprecated in Compose 1.8,
+    // but the suggested replacement (anchoredDraggableFlingBehavior) is marked internal
+    // and cannot be called from app code. Keeping the original constructor until Google
+    // provides a public migration path. Suppress the deprecation warning instead.
     val localDensity = LocalDensity.current
+    @Suppress("DEPRECATION")
     val panelState = remember {
-        AnchoredDraggableState(initialValue = PanelState.Center)
+        AnchoredDraggableState(
+            initialValue        = PanelState.Center,
+            positionalThreshold = { distance: Float -> distance * 0.4f },
+            velocityThreshold   = { with(localDensity) { 125.dp.toPx() } },
+            snapAnimationSpec   = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+            decayAnimationSpec  = splineBasedDecay(localDensity)
+        )
     }
-    val panelFlingBehavior = anchoredDraggableFlingBehavior(
-        state               = panelState,
-        positionalThreshold = { distance: Float -> distance * 0.4f },
-        velocityThreshold   = { with(localDensity) { 125.dp.toPx() } },
-        snapAnimationSpec   = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
-        decayAnimationSpec  = splineBasedDecay(localDensity)
-    )
     val isLeftDrawerOpen = panelState.targetValue == PanelState.LeftOpen
     val isRightPanelOpen = panelState.targetValue == PanelState.RightOpen
 
@@ -628,8 +628,7 @@ fun MainEditorScreen(
                 .fillMaxSize()
                 .then(
                     if (!isKeyboardVisible)
-                        // FIX 1 cont: pass panelFlingBehavior to modifier so thresholds/anim take effect
-                        Modifier.anchoredDraggable(panelState, Orientation.Horizontal, flingBehavior = panelFlingBehavior)
+                        Modifier.anchoredDraggable(panelState, Orientation.Horizontal)
                     else Modifier
                 )
         ) { measurables, constraints ->
