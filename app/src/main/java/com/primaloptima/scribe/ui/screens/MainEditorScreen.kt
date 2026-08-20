@@ -103,6 +103,7 @@ import com.primaloptima.scribe.ui.editor.ScribeEditor
 import com.primaloptima.scribe.ui.theme.FontHelper
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 
 private enum class PanelState { LeftOpen, Center, RightOpen }
@@ -295,9 +296,10 @@ fun MainEditorScreen(
 
     // Debounced sync of engine text back to EditorViewModel
     LaunchedEffect(engine) {
-        snapshotFlow { engine.textFieldState.text.toString() }
-            .debounce(400)
+        snapshotFlow { engine.documentRevision.value }
+            .map { engine.exportPlainText() }
             .distinctUntilChanged()
+            .debounce(400)
             .collect { text ->
                 editorVm.onContentChanged(text)
             }

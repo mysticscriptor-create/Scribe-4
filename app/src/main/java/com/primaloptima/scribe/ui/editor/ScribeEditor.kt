@@ -48,31 +48,23 @@ fun ScribeEditor(
     val listState = rememberLazyListState()
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    // Track which line the cursor is in
-    var activeLineIndex by remember { mutableIntStateOf(0) }
+    val activeLineIndex = engine.activeLineIndex.value
 
     // One FocusRequester per visible line is too expensive.
     // Use a single one; it always points at the active line's BasicTextField.
     val activeFocusRequester = remember { FocusRequester() }
     val activeBringIntoViewRequester = remember { BringIntoViewRequester() }
 
-    // Watch for focus requests from engine (outline jumps, search jumps)
-    LaunchedEffect(engine) {
-        engine.focusRequests.collectLatest { request ->
-            activeLineIndex = request.lineIndex
-        }
-    }
-
     // A lazy item must be composed before its FocusRequester can work.
     LaunchedEffect(activeLineIndex) {
-        val target = activeLineIndex.coerceIn(
-            0,
-            (engine.buffer.lineCount() - 1).coerceAtLeast(0)
-        )
-        listState.scrollToItem(target)
-        withFrameNanos { }
-        activeFocusRequester.requestFocus()
-        keyboardController?.show()
+        val totalLines = engine.buffer.lineCount()
+        if (totalLines > 0) {
+            val target = activeLineIndex.coerceIn(0, totalLines - 1)
+            listState.scrollToItem(target)
+            withFrameNanos { }
+            activeFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
     }
 
     val lineCount = engine.lineCount.value
@@ -106,7 +98,7 @@ fun ScribeEditor(
                     isActive = (lineIndex == activeLineIndex),
                     lineDocStart = lineDocStart,
                     onActivate = {
-                        activeLineIndex = lineIndex
+                        engine.requestLineFocus(lineIndex)
                     },
                     modifier = Modifier.fillMaxWidth()
                 )

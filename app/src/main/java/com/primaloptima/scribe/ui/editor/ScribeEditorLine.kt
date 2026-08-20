@@ -97,6 +97,22 @@ fun ScribeEditorLine(
         }
     }
 
+    // Handle cursor and focus placement requests for this line
+    LaunchedEffect(engine, lineIndex) {
+        engine.focusRequests.collectLatest { request ->
+            if (request.lineIndex == lineIndex) {
+                val col = if (request.column >= 0) {
+                    request.column.coerceIn(0, state.text.length)
+                } else {
+                    state.text.length
+                }
+                state.edit {
+                    selection = TextRange(col)
+                }
+            }
+        }
+    }
+
     // Sync user keystrokes back into the DocumentBuffer (only when active)
     LaunchedEffect(state, isActive) {
         if (isActive) {
@@ -108,9 +124,7 @@ fun ScribeEditorLine(
         }
     }
 
-    // Keep toolbar formatting and search commands aligned with the visible
-    // field. The engine stores document offsets; this state stores line-local
-    // offsets.
+    // Keep toolbar formatting and search commands aligned with the visible field
     LaunchedEffect(state, isActive) {
         if (isActive) {
             snapshotFlow { state.selection }
@@ -126,7 +140,7 @@ fun ScribeEditorLine(
 
     val lineDocEnd = lineDocStart + engine.buffer.lineLength(lineIndex)
 
-    val outputTransformation = remember(lineIndex, engine, colorScheme, typography, lineDocStart, lineDocEnd) {
+    val outputTransformation = remember(lineIndex, engine, colorScheme, typography, lineDocStart, lineDocEnd, docRevision) {
         ScribeOutputTransformation(
             engine = engine,
             colorScheme = colorScheme,
@@ -163,7 +177,7 @@ fun ScribeEditorLine(
                     },
                 textStyle = effectiveTextStyle,
                 cursorBrush = cursorBrush,
-                 lineLimits = TextFieldLineLimits.SingleLine,
+                lineLimits = TextFieldLineLimits.Default,
                 outputTransformation = outputTransformation,
                 inputTransformation = ScribeInputTransformation,
                 keyboardOptions = KeyboardOptions(
@@ -174,9 +188,15 @@ fun ScribeEditorLine(
                 )
             )
         } else {
-            // ── Inactive paragraph: plain Text(), zero IME cost ──
+            // ── Inactive paragraph: formatted Text(), zero IME cost ──
             val annotatedText = remember(currentLineText, lineDocStart, docRevision) {
-                AnnotatedString(currentLineText)
+                engine.formats.toAnnotatedString(
+                    lineStart = lineDocStart,
+                    lineEnd = lineDocStart + currentLineText.length,
+                    text = currentLineText,
+                    colorScheme = colorScheme,
+                    typography = typography
+                )
             }
             Text(
                 text = annotatedText,
