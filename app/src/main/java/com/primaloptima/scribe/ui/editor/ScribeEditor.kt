@@ -79,6 +79,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isUnspecified
 import androidx.compose.ui.unit.sp
 import com.primaloptima.scribe.engine.FastLineIndexer
 import com.primaloptima.scribe.engine.FormatSpan
@@ -202,11 +203,12 @@ class LineLayoutTracker(private val defaultLineHeight: Float, private val charsP
 @Composable
 fun ScribeEditor(
     engine: ScribeEditorEngine,
+    textStyle: TextStyle = TextStyle.Default,
+    cursorBrush: Brush = SolidColor(MaterialTheme.colorScheme.primary),
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(horizontal = 24.dp, vertical = 20.dp),
     fontSizeSp: Float = 16.5f,
     lineHeightSp: Float = 27.5f,
-    cursorBrush: Brush = SolidColor(MaterialTheme.colorScheme.primary),
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
@@ -217,13 +219,24 @@ fun ScribeEditor(
     val textToolbar = LocalTextToolbar.current
     val clipboardManager = LocalClipboardManager.current
 
-    val effectiveTextStyle = remember(fontSizeSp, lineHeightSp, colorScheme.onSurface) {
-        TextStyle(
-            fontSize = fontSizeSp.sp,
-            lineHeight = lineHeightSp.sp,
-            color = colorScheme.onSurface,
-            letterSpacing = 0.15.sp
-        )
+    val effectiveTextStyle = remember(textStyle, fontSizeSp, lineHeightSp, colorScheme.onSurface) {
+        val base = if (textStyle != TextStyle.Default) {
+            textStyle
+        } else {
+            TextStyle(
+                fontSize = fontSizeSp.sp,
+                lineHeight = lineHeightSp.sp,
+                color = colorScheme.onSurface,
+                letterSpacing = 0.15.sp
+            )
+        }
+        val lineH = if (base.lineHeight.isUnspecified || base.lineHeight.value <= 0f) {
+            val fs = if (base.fontSize.isUnspecified || base.fontSize.value <= 0f) fontSizeSp else base.fontSize.value
+            (fs * 1.6f).sp
+        } else {
+            base.lineHeight
+        }
+        base.copy(lineHeight = lineH)
     }
 
     val lineHeightPx = with(density) { effectiveTextStyle.lineHeight.toPx() }
