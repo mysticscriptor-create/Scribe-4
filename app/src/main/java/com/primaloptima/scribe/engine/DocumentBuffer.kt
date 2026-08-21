@@ -55,27 +55,23 @@ class DocumentBuffer(initialContent: String = "") : CharSequence {
     override val length: Int
         get() = totalLength
 
-    override fun get(index: Int): Char = charAt(index)
-
-    override fun subSequence(startIndex: Int, endIndex: Int): CharSequence {
-        return substring(startIndex, endIndex)
-    }
-
-    // ── Read operations ──────────────────────────────────────────────────
-
-    fun length(): Int = totalLength
-
-    fun charAt(pos: Int): Char {
-        if (pos !in 0 until totalLength) {
-            throw IndexOutOfBoundsException("Index out of bounds: $pos (length: $totalLength)")
+    override fun get(index: Int): Char {
+        if (index !in 0 until totalLength) {
+            throw IndexOutOfBoundsException("Index out of bounds: $index (length: $totalLength)")
         }
-        val (pieceIndex, localOffset) = findPieceAt(pos)
+        val (pieceIndex, localOffset) = findPieceAt(index)
         val piece = pieces[pieceIndex]
         return when (piece.source) {
             Source.ORIGINAL -> original[piece.start + localOffset]
             Source.APPEND -> appendBuf[piece.start + localOffset]
         }
     }
+
+    override fun subSequence(startIndex: Int, endIndex: Int): CharSequence {
+        return substring(startIndex, endIndex)
+    }
+
+    // ── Read operations ──────────────────────────────────────────────────
 
     fun substring(start: Int, end: Int): String {
         val s = start.coerceIn(0, totalLength)
@@ -354,7 +350,7 @@ class DocumentBuffer(initialContent: String = "") : CharSequence {
         val end = if (lineIndex + 1 < lineStartsCache.size) {
             // Subtract trailing newline character
             val nextStart = lineStartsCache[lineIndex + 1]
-            if (nextStart > start && charAt(nextStart - 1) == '\n') nextStart - 1 else nextStart
+            if (nextStart > start && this[nextStart - 1] == '\n') nextStart - 1 else nextStart
         } else {
             totalLength
         }
@@ -380,7 +376,7 @@ class DocumentBuffer(initialContent: String = "") : CharSequence {
         if (lineIndex < 0 || lineIndex >= lineStartsCache.size) return ""
         val start = lineStartsCache[lineIndex]
         val nextStart = if (lineIndex + 1 < lineStartsCache.size) lineStartsCache[lineIndex + 1] else totalLength
-        val end = if (nextStart > start && nextStart <= totalLength && charAt(nextStart - 1) == '\n') {
+        val end = if (nextStart > start && nextStart <= totalLength && this[nextStart - 1] == '\n') {
             nextStart - 1
         } else {
             nextStart

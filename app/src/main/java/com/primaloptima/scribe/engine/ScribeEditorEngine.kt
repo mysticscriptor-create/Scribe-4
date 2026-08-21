@@ -585,7 +585,7 @@ class ScribeEditorEngine(
     fun loadDocument(doc: SerializedDocument) {
         val plainText = doc.plainText
 
-        buffer.delete(0, buffer.length())
+        buffer.delete(0, buffer.length)
         if (plainText.isNotEmpty()) {
             buffer.insert(0, plainText)
         }
