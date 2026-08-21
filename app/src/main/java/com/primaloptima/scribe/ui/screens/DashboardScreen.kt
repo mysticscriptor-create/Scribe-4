@@ -40,6 +40,7 @@ import coil3.request.allowHardware
 import com.airbnb.lottie.compose.*
 import com.primaloptima.scribe.data.Book
 import com.primaloptima.scribe.data.Note
+import com.primaloptima.scribe.util.MarkdownUtil
 import com.primaloptima.scribe.ui.components.*
 import com.primaloptima.scribe.ui.theme.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -991,7 +992,7 @@ private fun RecentChaptersCard(
         onAction    = onSeeAll
     ) {
         chapters.forEachIndexed { index, chapter ->
-            val wordCount = chapter.wordCount
+            val wordCount = if (chapter.wordCount > 0) chapter.wordCount else MarkdownUtil.countWords(chapter.content)
             val previewLine = remember(chapter.content) {
                 chapter.content.lines()
                     .firstOrNull { it.isNotBlank() }

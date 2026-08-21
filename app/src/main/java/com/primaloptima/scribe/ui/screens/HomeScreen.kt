@@ -48,6 +48,7 @@ import com.primaloptima.scribe.ui.theme.FrostedPanelContent
 import androidx.compose.material3.LocalContentColor
 import com.primaloptima.scribe.util.BitmapBlur
 import com.primaloptima.scribe.util.GrainTexture
+import com.primaloptima.scribe.util.MarkdownUtil
 import androidx.compose.ui.platform.LocalView
 import com.primaloptima.scribe.ui.theme.rememberAdaptiveTextColor
 import dev.chrisbanes.haze.hazeSource
@@ -1216,7 +1217,7 @@ private fun NotesTabContent(
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(allNotes, key = { "notes_tab_${it.id}" }, contentType = { "note_row" }) { note ->
-                    val wordCount = note.wordCount
+                    val wordCount = if (note.wordCount > 0) note.wordCount else MarkdownUtil.countWords(note.content)
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()

@@ -50,17 +50,21 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -131,15 +135,33 @@ private class LiveDocumentLines(val fullText: String) {
             ""
         }
     }
+
+    fun lineIndexForOffset(offset: Int): Int {
+        val idx = lineStarts.binarySearch(offset)
+        return if (idx >= 0) {
+            idx
+        } else {
+            val insertionPoint = -(idx + 1)
+            (insertionPoint - 1).coerceIn(0, (lineStarts.size - 1).coerceAtLeast(0))
+        }
+    }
 }
 
 /**
  * Dynamic per-line height and cumulative top-offset tracker.
- * Handles paragraphs soft-wrapping to multiple visual lines with lazy layout measurement.
+ * Handles paragraphs soft-wrapping to multiple visual lines with pre-estimation and lazy layout measurement.
  */
-private class LineLayoutTracker(lineCount: Int, defaultLineHeight: Float) {
-    private val heights = FloatArray(lineCount.coerceAtLeast(1)) { defaultLineHeight }
-    private val offsets = FloatArray(lineCount.coerceAtLeast(1))
+private class LineLayoutTracker(
+    docLines: LiveDocumentLines,
+    defaultLineHeight: Float,
+    charsPerLine: Int = 45
+) {
+    private val heights = FloatArray(docLines.lineCount.coerceAtLeast(1)) { i ->
+        val len = if (i < docLines.lineCount) docLines.lineLength(i) else 0
+        val estLines = (len / charsPerLine).coerceAtLeast(1)
+        estLines * defaultLineHeight
+    }
+    private val offsets = FloatArray(docLines.lineCount.coerceAtLeast(1))
     private var dirty = true
 
     fun updateHeight(lineIndex: Int, height: Float): Boolean {
@@ -149,6 +171,10 @@ private class LineLayoutTracker(lineCount: Int, defaultLineHeight: Float) {
             return true
         }
         return false
+    }
+
+    fun getLineHeight(lineIndex: Int): Float {
+        return if (lineIndex in heights.indices) heights[lineIndex] else 0f
     }
 
     private fun recomputeOffsets() {
@@ -201,6 +227,7 @@ private class LineLayoutTracker(lineCount: Int, defaultLineHeight: Float) {
  * - Virtualized per-line measurement & rendering: draws only visible lines for 100k+ word documents.
  * - Soft-wrap awareness: cumulative paragraph Y tracker adjusts dynamically to wrapped lines.
  * - Real-time snapshot synchronization: directly reads live text to eliminate debounce lag.
+ * - Native container scrolling: handles large pasted texts and tap-to-focus without double-offset jumps.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -211,11 +238,10 @@ fun ScribeEditor(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(horizontal = 20.dp, vertical = 16.dp)
 ) {
-    // --- Scroll (owned by BasicTextField, observed by Canvas) ---
+    // --- Scroll State (owned by Canvas container) ---
     val scrollState = rememberScrollState()
 
     // --- Text measurement ---
-    // cacheSize=256: covers ~2 screens of lines. ScribeLineCache handles deterministic indexing.
     val textMeasurer = rememberTextMeasurer(cacheSize = 256)
 
     // --- Per-line layout cache ---
@@ -244,8 +270,11 @@ fun ScribeEditor(
 
     // Cumulative layout tracker for soft-wrapped paragraph heights
     val layoutTracker = remember(docLines.lineCount, lineHeightPx) {
-        LineLayoutTracker(docLines.lineCount, lineHeightPx)
+        LineLayoutTracker(docLines, lineHeightPx)
     }
+
+    var layoutVersion by remember { mutableIntStateOf(0) }
+    var viewportHeightPx by remember { mutableFloatStateOf(0f) }
 
     // --- Cursor blink (draw-phase only, key=Unit so it never restarts incorrectly) ---
     var cursorVisible by remember { mutableStateOf(true) }
@@ -273,6 +302,27 @@ fun ScribeEditor(
         }
     }
 
+    // --- Cursor auto-scroll into viewport when typing or moving selection ---
+    LaunchedEffect(engine.state.selection) {
+        val cursorPos = engine.state.selection.start
+        val lineIndex = docLines.lineIndexForOffset(cursorPos)
+        val lineTop = layoutTracker.getLineTop(lineIndex)
+        val lineHeight = layoutTracker.getLineHeight(lineIndex)
+        val lineBottom = lineTop + lineHeight
+        val currentScroll = scrollState.value
+        val viewport = viewportHeightPx
+        if (viewport > 0f) {
+            val paddingPx = with(density) { 64.dp.toPx() }
+            if (lineBottom > currentScroll + viewport - paddingPx) {
+                val target = (lineBottom - viewport + paddingPx).toInt()
+                scrollState.animateScrollTo(target.coerceIn(0, scrollState.maxValue))
+            } else if (lineTop < currentScroll + paddingPx) {
+                val target = (lineTop - paddingPx).toInt().coerceAtLeast(0)
+                scrollState.animateScrollTo(target.coerceIn(0, scrollState.maxValue))
+            }
+        }
+    }
+
     // --- Cache invalidation on document change ---
     LaunchedEffect(engine) {
         snapshotFlow { engine.state.text.toString() }
@@ -290,7 +340,6 @@ fun ScribeEditor(
         textStyle = effectiveTextStyle,
         cursorBrush = cursorBrush,
         lineLimits = TextFieldLineLimits.Default,
-        scrollState = scrollState, // hoisted — Canvas reads this too
         inputTransformation = ScribeInputTransformation,
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.Sentences,
@@ -303,11 +352,11 @@ fun ScribeEditor(
 
             // ── IME anchor ────────────────────────────────────────────────────────
             // innerTextField MUST be called or the keyboard disconnects.
-            // Placed far off-screen to prevent layout clipping and cursor mis-reporting.
+            // 0-size and transparent, so it never intercepts layout or gestures.
             Box(
                 Modifier
-                    .offset(x = 0.dp, y = (-9999).dp)
-                    .size(1.dp)
+                    .size(0.dp)
+                    .alpha(0f)
             ) {
                 innerTextField()
             }
@@ -316,11 +365,14 @@ fun ScribeEditor(
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
+                    .verticalScroll(scrollState)
                     .padding(contentPadding)
             ) {
-                val viewportHeightPx = constraints.maxHeight.toFloat()
-                val totalLines = docLines.lineCount.coerceAtLeast(1)
-                val totalHeightPx = layoutTracker.getTotalHeight() + with(density) { 200.dp.toPx() }
+                viewportHeightPx = constraints.maxHeight.toFloat()
+                val totalHeightPx = layoutTracker.getTotalHeight() + with(density) { 240.dp.toPx() }
+                // Observe layoutVersion to update measured height when lines wrap
+                @Suppress("UNUSED_VARIABLE")
+                val version = layoutVersion
 
                 Canvas(
                     modifier = Modifier
@@ -329,8 +381,7 @@ fun ScribeEditor(
                         .pointerInput(engine, docLines, layoutTracker) {
                             detectTapGestures(
                                 onTap = { tapOffset ->
-                                    val scrollY = scrollState.value.toFloat()
-                                    val docY = tapOffset.y + scrollY
+                                    val docY = tapOffset.y
                                     val lineIndex = layoutTracker.findLineAt(docY)
                                     val lineStart = docLines.lineStart(lineIndex)
                                     val lineContent = docLines.lineContent(lineIndex)
@@ -355,8 +406,7 @@ fun ScribeEditor(
                                     keyboardController?.show()
                                 },
                                 onLongPress = { tapOffset ->
-                                    val scrollY = scrollState.value.toFloat()
-                                    val docY = tapOffset.y + scrollY
+                                    val docY = tapOffset.y
                                     val lineIndex = layoutTracker.findLineAt(docY)
                                     engine.requestLineFocus(lineIndex)
                                 }
@@ -364,10 +414,11 @@ fun ScribeEditor(
                         }
                 ) {
                     val scrollY = scrollState.value.toFloat()
+                    val vh = if (viewportHeightPx > 0f) viewportHeightPx else size.height
 
                     // Viewport line range via binary search over cumulative paragraph offsets
                     val firstVisible = layoutTracker.findFirstVisible(scrollY)
-                    val lastVisible = layoutTracker.findLastVisible(scrollY + viewportHeightPx)
+                    val lastVisible = layoutTracker.findLastVisible(scrollY + vh)
 
                     val selStart = engine.state.selection.min
                     val selEnd = engine.state.selection.max
@@ -401,10 +452,12 @@ fun ScribeEditor(
                             }
 
                         // Update dynamic line height for soft-wrap handling
-                        layoutTracker.updateHeight(lineIndex, layoutResult.size.height.toFloat())
+                        if (layoutTracker.updateHeight(lineIndex, layoutResult.size.height.toFloat())) {
+                            layoutVersion++
+                        }
 
-                        // Exact top Y of this paragraph taking all preceding line heights into account
-                        val lineTopY = layoutTracker.getLineTop(lineIndex) - scrollY
+                        // Exact document Y of this paragraph (translated automatically by verticalScroll)
+                        val lineTopY = layoutTracker.getLineTop(lineIndex)
 
                         // ── Selection highlight ──────────────────────────────────────────
                         if (selStart != selEnd) {

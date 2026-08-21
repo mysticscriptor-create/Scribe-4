@@ -356,14 +356,21 @@ class EditorViewModel(
         if (loadNoteJob?.isActive == true) return
         loadNoteJob = viewModelScope.launch {
             val note = withContext(Dispatchers.IO) { db.noteDao().getById(noteId) } ?: return@launch
-            val loaded = if (note.externalUri != null && !note.loaded) {
+            var loaded = if (note.externalUri != null && !note.loaded) {
                 try {
                     val content = SAFHelper.readFile(getApplication(), Uri.parse(note.externalUri))
-                    val updated = note.copy(content = content, loaded = true)
+                    val wc = MarkdownUtil.countWords(content)
+                    val updated = note.copy(content = content, wordCount = wc, loaded = true)
                     withContext(Dispatchers.IO) { db.noteDao().update(updated) }
                     updated
                 } catch (_: Exception) { note.copy(loaded = true) }
             } else note
+
+            if (loaded.wordCount == 0 && loaded.content.isNotBlank()) {
+                val wc = MarkdownUtil.countWords(loaded.content)
+                withContext(Dispatchers.IO) { db.noteDao().updateWordCount(loaded.id, wc) }
+                loaded = loaded.copy(wordCount = wc)
+            }
 
             _activeNote.value = loaded
             lastSavedContent = loaded.content

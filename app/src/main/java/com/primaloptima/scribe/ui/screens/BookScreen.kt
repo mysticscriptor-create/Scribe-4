@@ -44,6 +44,7 @@ import com.primaloptima.scribe.ui.theme.LocalSolidSurface
 import com.primaloptima.scribe.ui.theme.frostedBar
 import com.primaloptima.scribe.ui.components.ScribeSpeedDialFab
 import com.primaloptima.scribe.ui.components.SpeedDialItem
+import com.primaloptima.scribe.util.MarkdownUtil
 import com.primaloptima.scribe.ui.components.ScribeTopBar
 import com.primaloptima.scribe.ui.components.ScribeBarAction
 import com.primaloptima.scribe.ui.theme.FrostedDialog
@@ -1249,7 +1250,10 @@ private fun NoteListRow(
     val onSurface   = MaterialTheme.colorScheme.onSurface
     val outline     = MaterialTheme.colorScheme.outline
 
-    val wordLabel   = remember(note.wordCount) { formatWordCount(note.wordCount) }
+    val wordLabel   = remember(note.wordCount, note.content) {
+        val count = if (note.wordCount > 0) note.wordCount else MarkdownUtil.countWords(note.content)
+        formatWordCount(count)
+    }
     val previewText = remember(note.content) {
         note.content.lineSequence().filter { it.isNotBlank() }.take(2).joinToString(" ").ifBlank { null }
     }

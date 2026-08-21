@@ -56,18 +56,14 @@ class ScribeApp : Application() {
     }
 
     /**
-     * Backfills word_count for any note that still has 0 (i.e., notes that
-     * existed before the Phase 1 migration ran, or brand-new empty notes).
-     * Takes ~1 second for 100 notes; runs invisibly in the background.
+     * Backfills word_count for any note that still has 0 (e.g., initial sample notes,
+     * notes imported or created before word count calculation).
+     * Takes ~20ms for hundreds of notes; runs non-blockingly on Dispatchers.IO.
      */
     private fun runWordCountBackfill() {
         @Suppress("OPT_IN_USAGE")
         GlobalScope.launch(Dispatchers.IO) {
             try {
-                // Guard: only run once. If the flag is set, all notes already have
-                // valid word counts from a previous launch — skip the full scan.
-                if (dataStore.isWordCountBackfillDone()) return@launch
-
                 val notes = database.noteDao().getAllIdAndContent()
                 notes.forEach { n ->
                     if (n.content.isNotBlank()) {
@@ -77,9 +73,7 @@ class ScribeApp : Application() {
                 }
                 dataStore.markWordCountBackfillDone()
             } catch (_: Exception) {
-                // Backfill is best-effort — a failure just means some word counts
-                // stay at 0 until the note is next edited. The flag is NOT set on
-                // failure so the backfill retries on the next launch.
+                // Backfill is best-effort
             }
         }
     }

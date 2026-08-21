@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import com.primaloptima.scribe.data.Note
 import com.primaloptima.scribe.ui.theme.LocalOneShotBitmap
 import com.primaloptima.scribe.ui.theme.frostedPanel
+import com.primaloptima.scribe.util.MarkdownUtil
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -189,8 +190,9 @@ fun EditorLeftDrawer(
                                     overflow   = TextOverflow.Ellipsis,
                                     modifier   = Modifier.weight(1f)
                                 )
+                                val wc = if (note.wordCount > 0) note.wordCount else MarkdownUtil.countWords(note.content)
                                 Text(
-                                    "${note.wordCount}w",
+                                    "${wc}w",
                                     fontSize = 11.sp,
                                     color    = MaterialTheme.colorScheme.outline
                                 )

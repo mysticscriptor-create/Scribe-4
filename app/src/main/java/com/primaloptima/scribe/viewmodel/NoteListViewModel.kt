@@ -9,6 +9,7 @@ import com.primaloptima.scribe.util.AppJson
 import com.primaloptima.scribe.data.Book
 import com.primaloptima.scribe.data.Folder
 import com.primaloptima.scribe.data.Note
+import com.primaloptima.scribe.util.MarkdownUtil
 import com.primaloptima.scribe.util.SAFHelper
 import com.primaloptima.scribe.util.model.ExternalRoot
 import kotlinx.serialization.encodeToString
@@ -79,10 +80,7 @@ class NoteListViewModel(application: Application) : AndroidViewModel(application
             Folder(path = "/Journal"),
             Folder(path = "/Drafts")
         ))
-        db.noteDao().insertAll(listOf(
-            Note(id = "welcome", name = "Welcome", bookId = bid, folderPath = "/", ext = "md",
-                 createdAt = now - 86400000L, updatedAt = now - 86400000L,
-                 content = """# Welcome to Scribe
+        val welcomeContent = """# Welcome to Scribe
 
 Your private, on-device writing space — distraction-free and fully offline.
 
@@ -99,10 +97,9 @@ Swipe in from the left edge inside the editor to see your book's files.
 
 ---
 
-Happy writing."""),
-            Note(id = "tips", name = "Tips", bookId = bid, folderPath = "/", ext = "md",
-                 createdAt = now - 43200000L, updatedAt = now - 43200000L,
-                 content = """# Tips
+Happy writing."""
+
+        val tipsContent = """# Tips
 
 ## Smart pairs
 
@@ -114,10 +111,9 @@ Open the menu and tap *Shortcuts* to add your own. Each shortcut can:
 
 - Insert plain text (em-dash, ellipsis, signature)
 - Wrap selection (markdown bold, italic, code)
-- Insert a paired character"""),
-            Note(id = "journal-jan", name = "January", bookId = bid, folderPath = "/Journal", ext = "md",
-                 createdAt = now - 21600000L, updatedAt = now - 21600000L,
-                 content = """# January
+- Insert a paired character"""
+
+        val janContent = """# January
 
 A new year. The page is open.
 
@@ -128,14 +124,31 @@ What I want to write about this year:
 - Slow mornings
 - The light through the kitchen window
 - The neighbour's cat
-- Letters I never sent"""),
-            Note(id = "draft-essay", name = "On attention", bookId = bid, folderPath = "/Drafts", ext = "md",
-                 createdAt = now - 1800000L, updatedAt = now - 1800000L,
-                 content = """# On attention
+- Letters I never sent"""
+
+        val essayContent = """# On attention
 
 The first draft is mostly about getting the shape down. Don't fix the prose yet. Don't pick at the words. Pour it out and then walk away for an hour.
 
-When you come back, read it aloud. The sentences that make you stumble are the sentences that need work.""")
+When you come back, read it aloud. The sentences that make you stumble are the sentences that need work."""
+
+        db.noteDao().insertAll(listOf(
+            Note(id = "welcome", name = "Welcome", bookId = bid, folderPath = "/", ext = "md",
+                 createdAt = now - 86400000L, updatedAt = now - 86400000L,
+                 wordCount = MarkdownUtil.countWords(welcomeContent),
+                 content = welcomeContent),
+            Note(id = "tips", name = "Tips", bookId = bid, folderPath = "/", ext = "md",
+                 createdAt = now - 43200000L, updatedAt = now - 43200000L,
+                 wordCount = MarkdownUtil.countWords(tipsContent),
+                 content = tipsContent),
+            Note(id = "journal-jan", name = "January", bookId = bid, folderPath = "/Journal", ext = "md",
+                 createdAt = now - 21600000L, updatedAt = now - 21600000L,
+                 wordCount = MarkdownUtil.countWords(janContent),
+                 content = janContent),
+            Note(id = "draft-essay", name = "On attention", bookId = bid, folderPath = "/Drafts", ext = "md",
+                 createdAt = now - 1800000L, updatedAt = now - 1800000L,
+                 wordCount = MarkdownUtil.countWords(essayContent),
+                 content = essayContent)
         ))
     }
 
