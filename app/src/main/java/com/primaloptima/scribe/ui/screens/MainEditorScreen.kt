@@ -294,12 +294,12 @@ fun MainEditorScreen(
         }
     }
 
-    // Debounced sync of engine text back to EditorViewModel
+    // Debounced sync of engine text back to EditorViewModel (zero intermediate string allocations)
     LaunchedEffect(engine) {
         snapshotFlow { engine.documentRevision.value }
+            .debounce(400)
             .map { engine.exportPlainText() }
             .distinctUntilChanged()
-            .debounce(400)
             .collect { text ->
                 editorVm.onContentChanged(text)
             }
