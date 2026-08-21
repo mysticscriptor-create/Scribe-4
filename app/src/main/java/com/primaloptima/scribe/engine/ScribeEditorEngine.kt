@@ -309,6 +309,41 @@ class ScribeEditorEngine(
     }
 
     // ── Formatting Commands ───────────────────────────────────────────────
+    fun insertAtCursor(text: String) {
+        if (text.isEmpty()) return
+        val sel = state.selection
+        val s = sel.min.coerceIn(0, state.text.length)
+        val e = sel.max.coerceIn(0, state.text.length)
+        state.edit {
+            replace(s, e, text)
+            selection = TextRange(s + text.length)
+        }
+        notifyMutation()
+    }
+
+    fun applyFormatWrap(open: String, close: String) {
+        val sel = state.selection
+        val s = sel.min.coerceIn(0, state.text.length)
+        val e = sel.max.coerceIn(0, state.text.length)
+        if (s == e) {
+            state.edit {
+                insert(s, "$open$close")
+                selection = TextRange(s + open.length)
+            }
+        } else {
+            val current = state.text.toString()
+            val safeStart = s.coerceIn(0, current.length)
+            val safeEnd = e.coerceIn(0, current.length)
+            val selected = current.substring(safeStart, safeEnd)
+            val wrapped = "$open$selected$close"
+            state.edit {
+                replace(safeStart, safeEnd, wrapped)
+                selection = TextRange(safeStart, safeStart + wrapped.length)
+            }
+        }
+        notifyMutation()
+    }
+
 
     fun toggleFormat(type: FormatType) {
         val sel = state.selection
