@@ -51,7 +51,8 @@ sealed class FormatEdit {
  * Automatically adjusts span boundaries on insertions and deletions.
  */
 class FormatRegistry {
-    private val spans = mutableStateListOf<FormatSpan>()
+    @PublishedApi
+    internal val spans = mutableStateListOf<FormatSpan>()
 
     fun exportAll(): List<FormatSpan> = spans.map { it.copy() }
 
