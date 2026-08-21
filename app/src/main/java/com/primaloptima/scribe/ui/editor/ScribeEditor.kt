@@ -16,8 +16,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
@@ -72,7 +72,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Dynamic per-line height & cumulative Y-offset tracker.
+ * Dynamic per-line height & cumulative Y-offset tracker with dirty-range prefix-sum recomputation.
  * Reuses internal primitive arrays to eliminate GC pressure during typing and scrolling.
  */
 class LineLayoutTracker(private val defaultLineHeight: Float, private val charsPerLine: Int = 38) {
@@ -81,7 +81,7 @@ class LineLayoutTracker(private val defaultLineHeight: Float, private val charsP
     private var isMeasured = BooleanArray(512)
     var count: Int = 0
         private set
-    private var dirty: Boolean = true
+    private var dirtyStartLine: Int = 0
     private var cachedTotalHeight: Float = 0f
 
     fun sync(indexer: FastLineIndexer) {
@@ -92,8 +92,8 @@ class LineLayoutTracker(private val defaultLineHeight: Float, private val charsP
             offsets = offsets.copyOf(newCap)
             isMeasured = isMeasured.copyOf(newCap)
         }
-
         val countChanged = (count != lineCount)
+        var firstUnmeasured = -1
         for (i in 0 until lineCount) {
             if (countChanged || !isMeasured[i] || heights[i] <= 0f) {
                 if (!isMeasured[i]) {
@@ -101,10 +101,13 @@ class LineLayoutTracker(private val defaultLineHeight: Float, private val charsP
                     val estLines = (len / charsPerLine).coerceAtLeast(1)
                     heights[i] = estLines * defaultLineHeight
                 }
+                if (firstUnmeasured == -1) firstUnmeasured = i
             }
         }
         count = lineCount
-        dirty = true
+        if (countChanged || firstUnmeasured != -1) {
+            dirtyStartLine = minOf(dirtyStartLine, if (firstUnmeasured != -1) firstUnmeasured else 0)
+        }
     }
 
     fun updateHeight(lineIndex: Int, height: Float): Boolean {
@@ -113,7 +116,7 @@ class LineLayoutTracker(private val defaultLineHeight: Float, private val charsP
             if (!isMeasured[lineIndex] || diff > 0.5f) {
                 heights[lineIndex] = height
                 isMeasured[lineIndex] = true
-                dirty = true
+                dirtyStartLine = minOf(dirtyStartLine, lineIndex)
                 return true
             }
         }
@@ -125,14 +128,15 @@ class LineLayoutTracker(private val defaultLineHeight: Float, private val charsP
     }
 
     private fun recomputeOffsets() {
-        if (!dirty) return
-        var accum = 0f
-        for (i in 0 until count) {
+        if (dirtyStartLine >= count) return
+        val start = dirtyStartLine.coerceIn(0, count)
+        var accum = if (start == 0) 0f else offsets[start - 1] + heights[start - 1]
+        for (i in start until count) {
             offsets[i] = accum
             accum += heights[i]
         }
-        cachedTotalHeight = accum
-        dirty = false
+        cachedTotalHeight = if (count > 0) offsets[count - 1] + heights[count - 1] else 0f
+        dirtyStartLine = Int.MAX_VALUE
     }
 
     fun getLineTop(lineIndex: Int): Float {
@@ -191,7 +195,6 @@ fun ScribeEditor(
 ) {
     val textMeasurer = rememberTextMeasurer(cacheSize = 512)
     val lineCache = remember { ScribeLineCache(maxCapacity = 1024) }
-
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
 
@@ -199,7 +202,6 @@ fun ScribeEditor(
     val colorScheme = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     val defaultTextColor = colorScheme.onBackground
-
     val effectiveTextStyle = remember(textStyle, defaultTextColor) {
         textStyle.copy(
             color = if (textStyle.color != Color.Unspecified) textStyle.color else defaultTextColor,
@@ -297,6 +299,7 @@ fun ScribeEditor(
         val lineHeight = layoutTracker.getLineHeight(lineIndex)
         val lineBottom = lineTop + lineHeight
         val viewport = viewportHeightPx
+
         if (viewport > 0f) {
             val paddingPx = with(density) { 16.dp.toPx() }
             val marginPx = with(density) { 48.dp.toPx() } // ignore tiny out-of-bounds due to height estimation
@@ -357,10 +360,10 @@ fun ScribeEditor(
         onTextLayout = { /* Canvas performs virtualized text layout */ },
         decorator = { innerTextField ->
             Box(Modifier.fillMaxSize()) {
-                // Invisible 0-size IME anchor
+                // Off-screen layout anchor for Android IME cursor rect anchoring
                 Box(
                     Modifier
-                        .size(0.dp)
+                        .offset(y = (-9999).dp)
                         .alpha(0f)
                 ) {
                     innerTextField()
@@ -398,14 +401,12 @@ fun ScribeEditor(
 
                                     val downPos = down.position
                                     val downTime = System.currentTimeMillis()
-
                                     val isDoubleTap = (downTime - lastTapTime in doubleTapMinTime..doubleTapTimeout) &&
                                             ((downPos - lastTapOffset).getDistance() <= touchSlop * 2f)
 
                                     if (isDoubleTap) {
                                         down.consume()
                                         lastTapTime = 0L
-
                                         val docY = downPos.y + scrollY
                                         val lineIndex = layoutTracker.findLineAt(docY)
                                         val lineStart = lineIndexer.lineStart(lineIndex)
@@ -431,13 +432,11 @@ fun ScribeEditor(
                                         while (true) {
                                             val event = awaitPointerEvent(PointerEventPass.Main)
                                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                            if (!change.pressed) {
-                                                // Finger lifted before long-press timeout!
-                                                return@withTimeoutOrNull change
+                                            if (!change.pressed || change.isConsumed) {
+                                                return@withTimeoutOrNull if (!change.pressed) change else null
                                             }
                                             if ((change.position - downPos).getDistance() > touchSlop) {
                                                 pointerMovedBeyondSlop = true
-                                                // Finger moved beyond touch slop -> user is scrolling, yield to scrollable!
                                                 return@withTimeoutOrNull null
                                             }
                                         }
@@ -471,7 +470,7 @@ fun ScribeEditor(
                                         focusRequester.requestFocus()
                                         keyboardController?.show()
                                     } else {
-                                        // Long press detected -> start drag selection!
+                                        // Pointer held past long-press timeout -> initiate drag selection
                                         val docY = downPos.y + scrollY
                                         val lineIndex = layoutTracker.findLineAt(docY)
                                         val lineStart = lineIndexer.lineStart(lineIndex)
@@ -509,14 +508,11 @@ fun ScribeEditor(
                     ) {
                         val currentScrollY = scrollY
                         val vh = if (viewportHeightPx > 0f) viewportHeightPx else size.height
-
                         val firstVisible = layoutTracker.findFirstVisible(currentScrollY)
                         val lastVisible = layoutTracker.findLastVisible(currentScrollY + vh)
-
                         val selStart = engine.state.selection.min
                         val selEnd = engine.state.selection.max
                         val cursorPos = engine.state.selection.start
-                        val searchVersion = engine.searchEngine.currentIndex
 
                         withTransform({ translate(left = 0f, top = -currentScrollY) }) {
                             for (lineIndex in firstVisible..lastVisible) {

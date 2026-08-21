@@ -2,7 +2,9 @@ package com.primaloptima.scribe.engine
 
 /**
  * High-performance, zero-allocation line indexer inspired by Sora Editor's Piece/Line Index.
- * Scans CharSequence directly without creating intermediate string allocations or boxed objects.
+ * Scans and mutates CharSequence indices directly without creating intermediate string allocations or boxed objects.
+ *
+ * Supports O(1) queries, O(lines) intra-line shifts, and single-line split/merge operations.
  */
 class FastLineIndexer {
     private var lineStarts = IntArray(512) { 0 }
@@ -10,12 +12,15 @@ class FastLineIndexer {
         private set
     private var docLength: Int = 0
 
+    /**
+     * Fast full scan over [text].
+     * Used for initial document load, large multi-line pastes, and undo history restorations.
+     */
     fun index(text: CharSequence) {
         docLength = text.length
         var count = 1
         if (lineStarts.isEmpty()) lineStarts = IntArray(512)
         lineStarts[0] = 0
-
         val len = text.length
         var i = 0
         while (i < len) {
@@ -28,6 +33,59 @@ class FastLineIndexer {
             i++
         }
         this.lineCount = count
+    }
+
+    /**
+     * Incremental in-place shift for intra-line edits (standard typing / deletion within a single line).
+     * Avoids full re-scanning by shifting offsets of subsequent lines.
+     */
+    fun updateIntraLine(lineIndex: Int, deltaLength: Int) {
+        if (deltaLength == 0 || lineIndex < 0 || lineIndex >= lineCount) return
+        for (i in (lineIndex + 1) until lineCount) {
+            lineStarts[i] += deltaLength
+        }
+        docLength = (docLength + deltaLength).coerceAtLeast(0)
+    }
+
+    /**
+     * Incremental line split when a newline is inserted at [splitOffset] on line [lineIndex].
+     */
+    fun splitLine(lineIndex: Int, splitOffset: Int) {
+        if (lineIndex < 0 || lineIndex >= lineCount) return
+        ensureCapacity(lineCount + 1)
+        val insertIdx = lineIndex + 1
+        if (insertIdx < lineCount) {
+            System.arraycopy(lineStarts, insertIdx, lineStarts, insertIdx + 1, lineCount - insertIdx)
+        }
+        lineStarts[insertIdx] = splitOffset + 1
+        lineCount++
+        docLength++
+        for (i in (insertIdx + 1) until lineCount) {
+            lineStarts[i] += 1
+        }
+    }
+
+    /**
+     * Incremental line merge when a newline between [lineIndex] and [lineIndex + 1] is deleted.
+     */
+    fun mergeLines(lineIndex: Int) {
+        if (lineIndex < 0 || lineIndex >= lineCount - 1) return
+        val removeIdx = lineIndex + 1
+        if (removeIdx < lineCount - 1) {
+            System.arraycopy(lineStarts, removeIdx + 1, lineStarts, removeIdx, lineCount - 1 - removeIdx)
+        }
+        lineCount--
+        docLength = (docLength - 1).coerceAtLeast(0)
+        for (i in removeIdx until lineCount) {
+            lineStarts[i] -= 1
+        }
+    }
+
+    private fun ensureCapacity(minCapacity: Int) {
+        if (minCapacity > lineStarts.size) {
+            val newCap = maxOf(minCapacity + 128, lineStarts.size * 2)
+            lineStarts = lineStarts.copyOf(newCap)
+        }
     }
 
     fun lineStart(index: Int): Int {

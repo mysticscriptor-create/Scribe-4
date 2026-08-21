@@ -62,7 +62,6 @@ class ScribeEditorEngine(
     val state = TextFieldState(initialContent)
 
     // ── Public Observable State ──────────────────────────────────────────
-
     private val _lineCount = mutableIntStateOf(lineIndexer.lineCount)
     val lineCount: State<Int> get() = _lineCount
 
@@ -88,7 +87,6 @@ class ScribeEditorEngine(
     val focusRequests: SharedFlow<LineFocusRequest> = _focusRequests.asSharedFlow()
 
     // ── Background Computed States ───────────────────────────────────────
-
     private val _wordCount = MutableStateFlow(0)
     val wordCount: StateFlow<Int> = _wordCount.asStateFlow()
 
@@ -107,11 +105,9 @@ class ScribeEditorEngine(
 
     // Mutation stream for debounced calculations
     private val mutationEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-
     private var lastRecordedText: String = initialContent
 
     // ── Find and Replace ─────────────────────────────────────────────────
-
     val searchEngine = FindReplaceEngine(
         getBuffer = { buffer },
         onDocumentModified = {
@@ -133,7 +129,7 @@ class ScribeEditorEngine(
         extractOutlineAsync(initialContent)
         runProseAnalysisAsync(initialContent)
 
-        // 1. Synchronous main-thread line indexer and selection sync
+        // 1. Synchronous main-thread line indexer and selection sync (Zero String Allocation)
         snapshotFlow { state.text }
             .onEach { textSnapshot ->
                 lineIndexer.index(textSnapshot)
@@ -150,14 +146,15 @@ class ScribeEditorEngine(
             .launchIn(viewModelScope)
 
         // 2. Debounced text diffing and undo recording on worker threads
-        snapshotFlow { state.text.toString() }
+        snapshotFlow { state.text }
             .drop(1)
             .debounce(200)
             .onEach { textSnapshot ->
+                val newText = textSnapshot.toString()
                 val oldText = lastRecordedText
-                if (oldText != textSnapshot) {
-                    recordTextDiff(oldText, textSnapshot)
-                    lastRecordedText = textSnapshot
+                if (oldText != newText) {
+                    recordTextDiff(oldText, newText)
+                    lastRecordedText = newText
                     notifyMutation()
                 }
             }
@@ -195,7 +192,7 @@ class ScribeEditorEngine(
             .launchIn(viewModelScope)
 
         // 6. Idle piece coalescing on DocumentBuffer
-        snapshotFlow { state.text.toString() }
+        snapshotFlow { state.text }
             .debounce(2000)
             .onEach {
                 withContext(Dispatchers.Default) {
@@ -208,7 +205,6 @@ class ScribeEditorEngine(
 
     private fun recordTextDiff(oldText: String, newText: String) {
         if (oldText == newText) return
-
         var prefix = 0
         val minLen = minOf(oldText.length, newText.length)
         while (prefix < minLen && oldText[prefix] == newText[prefix]) {
@@ -220,7 +216,6 @@ class ScribeEditorEngine(
             suffixOld--
             suffixNew--
         }
-
         val deleteLen = suffixOld - prefix
         val insertText = newText.substring(prefix, suffixNew)
 
@@ -234,7 +229,6 @@ class ScribeEditorEngine(
         if (deleteLen > 0 || insertText.isNotEmpty()) {
             val cursorLine = lineIndexer.lineIndexForOffset(prefix)
             val cursorCol = prefix - lineIndexer.lineStart(cursorLine)
-
             val entry = UndoEntry(
                 bufferEdit = when {
                     deleteLen > 0 && insertText.isNotEmpty() ->
@@ -283,7 +277,6 @@ class ScribeEditorEngine(
     }
 
     fun notifyMutation() {
-        // lineIndexer is kept in sync by snapshotFlow { state.text } in init — do not re-index here
         _lineCount.intValue = lineIndexer.lineCount
         _canUndo.value = undoStack.canUndo()
         _canRedo.value = undoStack.canRedo()
@@ -299,185 +292,93 @@ class ScribeEditorEngine(
         val validLine = lineIndex.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
         val lineStart = lineIndexer.lineStart(validLine)
         val lineLen = lineIndexer.lineLength(validLine)
-        val safeStart = localStart.coerceIn(0, lineLen)
-        val safeEnd = localEnd.coerceIn(0, lineLen)
+
+        val safeLocalStart = localStart.coerceIn(0, lineLen)
+        val safeLocalEnd = localEnd.coerceIn(0, lineLen)
+
         _activeLineIndex.intValue = validLine
-        _activeLineSelection.value = TextRange(safeStart, safeEnd)
-        state.edit {
-            selection = TextRange(lineStart + safeStart, lineStart + safeEnd)
-        }
-    }
+        _activeLineSelection.value = TextRange(safeLocalStart, safeLocalEnd)
 
-    val activeDocSelection: TextRange
-        get() = state.selection
-
-    // ── Editing API ──────────────────────────────────────────────────────
-
-    fun onLineChanged(lineIndex: Int, newText: String, cursorPos: Int) {
-        val totalLines = lineIndexer.lineCount
-        val validLine = lineIndex.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
-        val lineStart = lineIndexer.lineStart(validLine)
-        val lineEnd = lineStart + lineIndexer.lineLength(validLine)
-
-        state.edit {
-            replace(lineStart, lineEnd, newText)
-            selection = TextRange((lineStart + cursorPos).coerceIn(0, length))
-        }
-        notifyMutation()
-    }
-
-    fun onLineInserted(afterLineIndex: Int, splitAt: Int, currentLineText: String) {
-        val totalLines = lineIndexer.lineCount
-        val validLine = afterLineIndex.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
-        val lineStart = lineIndexer.lineStart(validLine)
-        val splitOffset = lineStart + splitAt.coerceIn(0, currentLineText.length)
-
-        state.edit {
-            insert(splitOffset, "\n")
-            selection = TextRange(splitOffset + 1)
-        }
-        notifyMutation()
-    }
-
-    fun onLineMerge(lineIndex: Int) {
-        if (lineIndex <= 0) return
-        val currentLineStart = lineIndexer.lineStart(lineIndex)
-        if (currentLineStart > 0) {
+        val docStart = lineStart + safeLocalStart
+        val docEnd = lineStart + safeLocalEnd
+        if (state.selection.start != docStart || state.selection.end != docEnd) {
             state.edit {
-                delete(currentLineStart - 1, currentLineStart)
-                selection = TextRange(currentLineStart - 1)
-            }
-            notifyMutation()
-        }
-    }
-
-    fun insertAtCursor(text: String) {
-        if (text.isEmpty()) return
-        val sel = state.selection
-        val s = sel.min
-        val e = sel.max
-        state.edit {
-            replace(s, e, text)
-            selection = TextRange(s + text.length)
-        }
-        notifyMutation()
-    }
-
-    fun insertAtCursor(lineIndex: Int, cursorPos: Int, text: String) {
-        if (text.isEmpty()) return
-        val totalLines = lineIndexer.lineCount
-        val validLine = lineIndex.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
-        val lineStart = lineIndexer.lineStart(validLine)
-        val lineLen = lineIndexer.lineLength(validLine)
-        val safeCursor = cursorPos.coerceIn(0, lineLen)
-        val insertPos = lineStart + safeCursor
-
-        state.edit {
-            insert(insertPos, text)
-            selection = TextRange(insertPos + text.length)
-        }
-        notifyMutation()
-    }
-
-    fun applyFormatWrap(open: String, close: String) {
-        val sel = state.selection
-        val s = sel.min
-        val e = sel.max
-        if (s == e) {
-            state.edit {
-                insert(s, "$open$close")
-                selection = TextRange(s + open.length)
-            }
-        } else {
-            val current = state.text.toString()
-            val safeStart = s.coerceIn(0, current.length)
-            val safeEnd = e.coerceIn(0, current.length)
-            val selected = current.substring(safeStart, safeEnd)
-            val wrapped = "$open$selected$close"
-            state.edit {
-                replace(safeStart, safeEnd, wrapped)
-                selection = TextRange(safeStart, safeStart + wrapped.length)
+                selection = TextRange(docStart, docEnd)
             }
         }
-        notifyMutation()
     }
 
-    fun applyFormatWrap(lineIndex: Int, selStart: Int, selEnd: Int, open: String, close: String) {
-        val totalLines = lineIndexer.lineCount
-        val validLine = lineIndex.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
-        val lineStart = lineIndexer.lineStart(validLine)
-        val s = (lineStart + minOf(selStart, selEnd)).coerceIn(0, state.text.length)
-        val e = (lineStart + maxOf(selStart, selEnd)).coerceIn(0, state.text.length)
-
-        if (s == e) {
-            state.edit {
-                insert(s, "$open$close")
-                selection = TextRange(s + open.length)
-            }
-        } else {
-            val current = state.text.toString()
-            val selected = current.substring(s, e)
-            val wrapped = "$open$selected$close"
-            state.edit {
-                replace(s, e, wrapped)
-                selection = TextRange(s, s + wrapped.length)
-            }
-        }
-        notifyMutation()
-    }
-
-    fun deleteSelection() {
-        val sel = state.selection
-        val s = sel.min
-        val e = sel.max
-        if (s != e) {
-            state.edit {
-                delete(s, e)
-                selection = TextRange(s)
-            }
-            notifyMutation()
-        }
-    }
+    // ── Formatting Commands ───────────────────────────────────────────────
 
     fun toggleFormat(type: FormatType) {
         val sel = state.selection
-        val s: Int
-        val e: Int
-        if (sel.collapsed) {
-            val lineIdx = lineIndexer.lineIndexForOffset(sel.start)
-            s = lineIndexer.lineStart(lineIdx)
-            e = s + lineIndexer.lineLength(lineIdx)
-        } else {
-            s = sel.min
-            e = sel.max
+        val s = sel.min.coerceIn(0, state.text.length)
+        val e = sel.max.coerceIn(0, state.text.length)
+        if (s >= e && type != FormatType.SCENE_SEPARATOR) return
+
+        val formatEdit = formats.toggleSpan(type, s, e)
+        val activeLine = _activeLineIndex.intValue
+        val cursorPos = CursorPos(activeLine, (s - lineIndexer.lineStart(activeLine)).coerceAtLeast(0))
+        undoStack.push(UndoEntry(formatEdit = formatEdit, cursorBefore = cursorPos, cursorAfter = cursorPos))
+        notifyMutation()
+    }
+
+    fun applyHeading(type: FormatType) {
+        if (!type.isHeading()) return
+        val activeLine = _activeLineIndex.intValue
+        val lineStart = lineIndexer.lineStart(activeLine)
+        val lineEnd = lineIndexer.lineEnd(activeLine)
+        val formatEdit = formats.addSpan(FormatSpan(type, lineStart, lineEnd))
+        val cursorPos = CursorPos(activeLine, 0)
+        undoStack.push(UndoEntry(formatEdit = formatEdit, cursorBefore = cursorPos, cursorAfter = cursorPos))
+        notifyMutation()
+    }
+
+    fun removeHeading() {
+        val activeLine = _activeLineIndex.intValue
+        val lineStart = lineIndexer.lineStart(activeLine)
+        val lineEnd = lineIndexer.lineEnd(activeLine)
+        val edits = mutableListOf<FormatEdit>()
+        for (hType in listOf(FormatType.H1, FormatType.H2, FormatType.H3)) {
+            edits.add(formats.removeSpan(hType, lineStart, lineEnd))
         }
-        if (s >= e && type != FormatType.SCENE_SEPARATOR) return
-        val formatEdit = formats.toggleSpan(type, s, e)
-        val lineIdx = lineIndexer.lineIndexForOffset(s)
-        val lineStart = lineIndexer.lineStart(lineIdx)
-        val cursorPos = CursorPos(lineIdx, (s - lineStart).coerceAtLeast(0))
-        undoStack.push(UndoEntry(formatEdit = formatEdit, cursorBefore = cursorPos, cursorAfter = cursorPos))
+        val cursorPos = CursorPos(activeLine, 0)
+        undoStack.push(UndoEntry(formatEdit = FormatEdit.Compound(edits), cursorBefore = cursorPos, cursorAfter = cursorPos))
         notifyMutation()
     }
 
-    fun toggleFormat(type: FormatType, selStart: Int, selEnd: Int) {
-        val s = minOf(selStart, selEnd).coerceIn(0, state.text.length)
-        val e = maxOf(selStart, selEnd).coerceIn(0, state.text.length)
-        if (s >= e && type != FormatType.SCENE_SEPARATOR) return
-        val formatEdit = formats.toggleSpan(type, s, e)
-        val lineIdx = lineIndexer.lineIndexForOffset(s)
-        val lineStart = lineIndexer.lineStart(lineIdx)
-        val cursorPos = CursorPos(lineIdx, (s - lineStart).coerceAtLeast(0))
-        undoStack.push(UndoEntry(formatEdit = formatEdit, cursorBefore = cursorPos, cursorAfter = cursorPos))
+    fun insertSceneSeparator() {
+        val sel = state.selection
+        val pos = sel.max.coerceIn(0, state.text.length)
+        val separatorText = "\n* * *\n"
+        state.edit {
+            insert(pos, separatorText)
+        }
+        formats.addSpan(FormatSpan(FormatType.SCENE_SEPARATOR, pos + 1, pos + 6))
         notifyMutation()
     }
 
-    fun toggleFormatOnLine(lineIndex: Int, type: FormatType) {
+    fun formatActiveLine(type: FormatType) {
         val totalLines = lineIndexer.lineCount
-        val validLine = lineIndex.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
-        val s = lineIndexer.lineStart(validLine)
-        val e = s + lineIndexer.lineLength(validLine)
+        val validLine = _activeLineIndex.intValue.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
+        val lineStart = lineIndexer.lineStart(validLine)
+        val lineEnd = lineIndexer.lineEnd(validLine)
+        if (lineStart >= lineEnd && type != FormatType.SCENE_SEPARATOR) return
+
+        val formatEdit = formats.toggleSpan(type, lineStart, lineEnd)
+        val cursorPos = CursorPos(validLine, 0)
+        undoStack.push(UndoEntry(formatEdit = formatEdit, cursorBefore = cursorPos, cursorAfter = cursorPos))
+        notifyMutation()
+    }
+
+    fun formatSelection(type: FormatType) {
+        val sel = state.selection
+        val s = sel.min.coerceIn(0, state.text.length)
+        val e = sel.max.coerceIn(0, state.text.length)
+        val activeLine = _activeLineIndex.intValue
+        val validLine = activeLine.coerceIn(0, (lineIndexer.lineCount - 1).coerceAtLeast(0))
         if (s >= e && type != FormatType.SCENE_SEPARATOR) return
+
         val formatEdit = formats.toggleSpan(type, s, e)
         val cursorPos = CursorPos(validLine, 0)
         undoStack.push(UndoEntry(formatEdit = formatEdit, cursorBefore = cursorPos, cursorAfter = cursorPos))
@@ -591,17 +492,14 @@ class ScribeEditorEngine(
 
     fun loadDocument(doc: SerializedDocument) {
         val plainText = doc.plainText
-
         buffer.delete(0, buffer.length)
         if (plainText.isNotEmpty()) {
             buffer.insert(0, plainText)
         }
-
         state.edit {
             replace(0, length, plainText)
             selection = TextRange(0)
         }
-
         val loadedSpans = doc.spans.mapNotNull { span ->
             try {
                 FormatSpan(FormatType.valueOf(span.type), span.start, span.end)
@@ -610,16 +508,13 @@ class ScribeEditorEngine(
             }
         }
         formats.loadAll(loadedSpans)
-
         undoStack.clear()
         searchEngine.clear()
         lastRecordedText = plainText
         lineIndexer.index(plainText)
         _lineCount.intValue = lineIndexer.lineCount
-
         _activeLineIndex.intValue = 0
         _activeLineSelection.value = TextRange(0, 0)
-
         notifyMutation()
         _wordCount.value = countWords(plainText)
         _charCount.value = plainText.length
@@ -633,16 +528,13 @@ class ScribeEditorEngine(
         outlineJob = viewModelScope.launch(Dispatchers.Default) {
             val totalLines = lineIndexer.lineCount
             val entries = mutableListOf<OutlineEntry>()
-
             for (i in 0 until totalLines) {
                 coroutineContext.ensureActive()
                 val content = lineIndexer.getLineContent(text, i).trim()
                 if (content.isEmpty()) continue
-
                 val lineStart = lineIndexer.lineStart(i)
                 val lineEnd = lineStart + content.length
                 val headingSpan = formats.spansIn(lineStart, lineEnd).firstOrNull { it.type.isHeading() }
-
                 if (headingSpan != null) {
                     entries.add(
                         OutlineEntry(
@@ -668,7 +560,6 @@ class ScribeEditorEngine(
                     }
                 }
             }
-
             withContext(Dispatchers.Main) {
                 _outline.value = entries
             }

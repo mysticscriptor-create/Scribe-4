@@ -9,21 +9,9 @@
  *   keyed on (lineIndex, contentHash). An unchanged line always hits the cache
  *   regardless of LRU pressure.
  *
- * DOCUMENTBUFFER API CONTRACT (Researched August 2026):
- *   - DocumentBuffer.lineCount(): Int returns total line count based on lineStartsCache.size.
- *   - DocumentBuffer.lineStart(index: Int): Int returns the starting document character offset.
- *   - DocumentBuffer.lineLength(index: Int): Int returns character length excluding trailing newline.
- *   - DocumentBuffer.lineContent(index: Int): String returns line substring.
- *   - DocumentBuffer has no granular dirtyLines() / changedSince() tracking, so lineCache.clear()
- *     is used on snapshot commits, which is O(visible_lines) on redraw.
- *
  * CACHE KEY:
- *   Int derived as: lineText.hashCode() * 31 xor spans.hashCode()
- *   Pure Kotlin, no Android deps, testable on JVM.
- *
- * EVICTION:
- *   Max 512 entries. When exceeded, the entry with the lowest line index is evicted
- *   (it has scrolled furthest off-screen and is least likely to be needed soon).
+ *   Deterministic integer combining char-by-char CharSequence hash, span hash, and search version.
+ *   Computed with zero object allocations.
  */
 package com.primaloptima.scribe.ui.editor
 
@@ -44,7 +32,6 @@ data class CachedLine(
  * - LRU/capacity eviction bounds memory while avoiding unnecessary garbage collection.
  */
 class ScribeLineCache(private val maxCapacity: Int = 1024) {
-
     private val map = LinkedHashMap<Int, CachedLine>(maxCapacity + 1, 0.75f, true)
 
     /** Returns a cached result only if contentHash still matches. null = stale or absent. */
@@ -80,11 +67,17 @@ class ScribeLineCache(private val maxCapacity: Int = 1024) {
     }
 }
 
-/** Content hash: fast calculation combining line text, format spans, and search highlights. */
+/**
+ * Content hash: fast zero-allocation calculation combining line text, format spans, and search highlights.
+ * Uses a char-by-char polynomial hash without creating intermediate substring allocations.
+ */
 fun contentHash(lineText: CharSequence, spans: List<Any>, searchVersion: Int = 0): Int {
-    var result = lineText.hashCode()
-    result = 31 * result + spans.hashCode()
-    result = 31 * result + searchVersion
-    return result
+    var h = 0
+    val len = lineText.length
+    for (i in 0 until len) {
+        h = 31 * h + lineText[i].code
+    }
+    h = 31 * h + spans.hashCode()
+    h = 31 * h + searchVersion
+    return h
 }
-
