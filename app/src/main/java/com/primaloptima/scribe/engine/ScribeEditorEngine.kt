@@ -308,6 +308,51 @@ class ScribeEditorEngine(
         }
     }
 
+    // ── Selection & Text Helpers ─────────────────────────────────────────
+    fun getSelectedText(): String {
+        val sel = state.selection
+        val s = sel.min.coerceIn(0, state.text.length)
+        val e = sel.max.coerceIn(0, state.text.length)
+        return if (s < e) state.text.substring(s, e) else ""
+    }
+
+    fun deleteSelection() {
+        val sel = state.selection
+        val s = sel.min.coerceIn(0, state.text.length)
+        val e = sel.max.coerceIn(0, state.text.length)
+        if (s < e) {
+            state.edit {
+                delete(s, e)
+                selection = TextRange(s)
+            }
+            notifyMutation()
+        }
+    }
+
+    fun selectAll() {
+        val len = state.text.length
+        state.edit {
+            selection = TextRange(0, len)
+        }
+    }
+
+    fun selectWordAt(offset: Int): TextRange {
+        val text = state.text
+        if (text.isEmpty()) return TextRange(0, 0)
+        val pos = offset.coerceIn(0, text.length - 1)
+        var start = pos
+        var end = pos
+        while (start > 0 && isWordChar(text[start - 1])) {
+            start--
+        }
+        while (end < text.length && isWordChar(text[end])) {
+            end++
+        }
+        return if (start < end) TextRange(start, end) else TextRange(pos, (pos + 1).coerceAtMost(text.length))
+    }
+
+    private fun isWordChar(c: Char): Boolean = c.isLetterOrDigit() || c == '_'
+
     // ── Formatting Commands ───────────────────────────────────────────────
     fun insertAtCursor(text: String) {
         if (text.isEmpty()) return
