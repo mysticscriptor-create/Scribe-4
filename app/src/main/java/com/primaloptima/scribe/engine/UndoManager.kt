@@ -2,7 +2,6 @@ package com.primaloptima.scribe.engine
 
 data class UndoEntry(
     val bufferEdit: Edit,
-    val formatEdit: FormatEdit? = null,
     val cursorBefore: CursorPos,
     val cursorAfter: CursorPos,
     val timestamp: Long = System.currentTimeMillis(),
@@ -26,15 +25,14 @@ class UndoManager(val limit: Int = 200) {
             val last = undoStack.last()
             val timeDiff = entry.timestamp - last.timestamp
 
-            // Merge typing keystrokes within 500ms if contiguous single-char inserts or deletes without format changes
-            if (timeDiff < 500 && last.formatEdit == null && entry.formatEdit == null && last.label.isEmpty() && entry.label.isEmpty()) {
+            // Merge typing keystrokes within 500ms if contiguous single-char inserts or deletes
+            if (timeDiff < 500 && last.label.isEmpty() && entry.label.isEmpty()) {
                 val mergedBufferEdit = tryMergeEdits(last.bufferEdit, entry.bufferEdit)
                 if (mergedBufferEdit != null) {
                     undoStack.removeLast()
                     undoStack.addLast(
                         UndoEntry(
                             bufferEdit = mergedBufferEdit,
-                            formatEdit = null,
                             cursorBefore = last.cursorBefore,
                             cursorAfter = entry.cursorAfter,
                             timestamp = entry.timestamp
@@ -68,26 +66,16 @@ class UndoManager(val limit: Int = 200) {
         return null
     }
 
-    fun undo(buffer: DocumentBuffer, formats: FormatRegistry): UndoEntry? {
+    fun undo(): UndoEntry? {
         if (undoStack.isEmpty()) return null
         val entry = undoStack.removeLast()
-        // Invert buffer changes
-        buffer.invertEdit(entry.bufferEdit)
-        // Invert format changes
-        entry.formatEdit?.let { formats.invertFormatEdit(it) }
-
         redoStack.addLast(entry)
         return entry
     }
 
-    fun redo(buffer: DocumentBuffer, formats: FormatRegistry): UndoEntry? {
+    fun redo(): UndoEntry? {
         if (redoStack.isEmpty()) return null
         val entry = redoStack.removeLast()
-        // Re-apply buffer changes
-        buffer.applyEdit(entry.bufferEdit)
-        // Re-apply format changes
-        entry.formatEdit?.let { formats.applyFormatEdit(it) }
-
         undoStack.addLast(entry)
         return entry
     }

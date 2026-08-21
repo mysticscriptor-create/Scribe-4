@@ -29,34 +29,64 @@ class FindReplaceEngine(
     var currentQuery by androidx.compose.runtime.mutableStateOf("")
         private set
 
-    fun search(query: String, caseSensitive: Boolean = false, isRegex: Boolean = false) {
+    fun search(query: String, caseSensitive: Boolean = false, isRegex: Boolean = false): List<SearchResult> {
         currentQuery = query
         val buffer = getBuffer()
         if (query.isEmpty()) {
             _results.clear()
             currentIndex = -1
-            return
+            return emptyList()
         }
 
-        val offsets = buffer.search(query, caseSensitive, isRegex)
+        val results = mutableListOf<SearchResult>()
+        val pattern = if (isRegex) {
+            try {
+                java.util.regex.Pattern.compile(query, if (caseSensitive) 0 else java.util.regex.Pattern.CASE_INSENSITIVE)
+            } catch (_: Exception) {
+                _results.clear()
+                currentIndex = -1
+                return emptyList()
+            }
+        } else null
+
+        buffer.forEachLine { lineIdx, lineStart, lineContent ->
+            if (pattern != null) {
+                val matcher = pattern.matcher(lineContent)
+                while (matcher.find()) {
+                    val matchLen = matcher.end() - matcher.start()
+                    results.add(
+                        SearchResult(
+                            lineIndex = lineIdx,
+                            lineLocalStart = matcher.start(),
+                            lineLocalEnd = matcher.end(),
+                            docOffset = lineStart + matcher.start(),
+                            matchLength = matchLen
+                        )
+                    )
+                }
+            } else {
+                var idx = 0
+                while (idx < lineContent.length) {
+                    val found = lineContent.indexOf(query, idx, ignoreCase = !caseSensitive)
+                    if (found == -1) break
+                    results.add(
+                        SearchResult(
+                            lineIndex = lineIdx,
+                            lineLocalStart = found,
+                            lineLocalEnd = found + query.length,
+                            docOffset = lineStart + found,
+                            matchLength = query.length
+                        )
+                    )
+                    idx = found + maxOf(1, query.length)
+                }
+            }
+        }
+
         _results.clear()
-
-        offsets.forEach { offset ->
-            val lineIdx = buffer.lineIndexAt(offset)
-            val lineStart = buffer.lineStart(lineIdx)
-            val matchLen = query.length
-            _results.add(
-                SearchResult(
-                    lineIndex = lineIdx,
-                    lineLocalStart = (offset - lineStart).coerceAtLeast(0),
-                    lineLocalEnd = (offset - lineStart + matchLen).coerceAtLeast(0),
-                    docOffset = offset,
-                    matchLength = matchLen
-                )
-            )
-        }
-
+        _results.addAll(results)
         currentIndex = if (_results.isEmpty()) -1 else 0
+        return results
     }
 
     fun goToNext(): SearchResult? {

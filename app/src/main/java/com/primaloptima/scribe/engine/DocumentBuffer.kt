@@ -373,6 +373,44 @@ class DocumentBuffer(initialContent: String = "") {
 
     // ── Internal Helpers ─────────────────────────────────────────────────
 
+    /**
+     * Coalesces adjacent pieces that share the same source buffer and contiguous offsets.
+     * Shrinks piece count back towards minimal allocations during idle periods.
+     */
+    fun coalesce() {
+        if (pieces.size <= 2) return
+        val merged = mutableListOf<Piece>()
+        var i = 0
+        while (i < pieces.size) {
+            val cur = pieces[i]
+            var j = i + 1
+            var totalLen = cur.length
+            while (j < pieces.size) {
+                val next = pieces[j]
+                if (next.source == cur.source && next.start == cur.start + totalLen) {
+                    totalLen += next.length
+                    j++
+                } else break
+            }
+            merged.add(Piece(cur.source, cur.start, totalLen))
+            i = j
+        }
+        pieces.clear()
+        pieces.addAll(merged)
+    }
+
+    /**
+     * Iterates line by line without allocating a full document string.
+     */
+    inline fun forEachLine(action: (lineIndex: Int, lineStart: Int, lineContent: String) -> Unit) {
+        val total = lineCount()
+        for (i in 0 until total) {
+            val start = lineStart(i)
+            val content = lineContent(i)
+            action(i, start, content)
+        }
+    }
+
     private fun findPieceAt(pos: Int): Pair<Int, Int> {
         var currentOffset = 0
         for (i in 0 until pieces.size) {
