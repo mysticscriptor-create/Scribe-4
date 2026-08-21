@@ -143,6 +143,12 @@ class ScribeEditorEngine(
             }
             .launchIn(viewModelScope)
 
+        snapshotFlow { state.selection }
+            .onEach { sel ->
+                syncSelectionFromUI(sel)
+            }
+            .launchIn(viewModelScope)
+
         // 2. Debounced text diffing and undo recording on worker threads
         snapshotFlow { state.text.toString() }
             .drop(1)

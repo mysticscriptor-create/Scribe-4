@@ -6,8 +6,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.rememberScrollableState
 import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Box
@@ -41,11 +41,13 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -65,6 +67,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Dynamic per-line height & cumulative Y-offset tracker.
@@ -242,11 +245,13 @@ fun ScribeEditor(
 
     fun animateScrollTo(targetY: Float) {
         scrollAnimationJob?.cancel()
+        val target = targetY.coerceIn(0f, computeMaxScrollY())
+        if (kotlin.math.abs(scrollY - target) < 1f) return
         scrollAnimationJob = coroutineScope.launch {
             val animatable = Animatable(scrollY, Float.VectorConverter)
             animatable.animateTo(
-                targetValue = targetY,
-                animationSpec = spring(stiffness = 650f, dampingRatio = 0.85f)
+                targetValue = target,
+                animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)
             ) {
                 val stepMax = computeMaxScrollY()
                 scrollY = value.coerceIn(0f, stepMax)
@@ -278,7 +283,7 @@ fun ScribeEditor(
         }
     }
 
-    // Viewport tracking: ensure cursor remains visible
+    // Viewport tracking: ensure cursor remains visible only when cursor goes outside viewport
     LaunchedEffect(engine.state.selection) {
         val cursorPos = engine.state.selection.start
         val lineIndex = lineIndexer.lineIndexForOffset(cursorPos)
@@ -287,14 +292,43 @@ fun ScribeEditor(
         val lineBottom = lineTop + lineHeight
         val viewport = viewportHeightPx
         if (viewport > 0f) {
-            val paddingPx = with(density) { 64.dp.toPx() }
-            if (lineBottom > scrollY + viewport - paddingPx) {
-                val target = lineBottom - viewport + paddingPx
+            val paddingPx = with(density) { 16.dp.toPx() }
+            if (lineBottom > scrollY + viewport) {
+                val target = (lineBottom - viewport + paddingPx).coerceAtLeast(0f)
                 animateScrollTo(target)
-            } else if (lineTop < scrollY + paddingPx) {
+            } else if (lineTop < scrollY) {
                 val target = (lineTop - paddingPx).coerceAtLeast(0f)
                 animateScrollTo(target)
             }
+        }
+    }
+
+    fun getOrMeasureLineLayout(
+        lineIndex: Int,
+        canvasWidth: Int
+    ): TextLayoutResult {
+        val lineStart = lineIndexer.lineStart(lineIndex)
+        val lineLen = lineIndexer.lineLength(lineIndex)
+        val lineEnd = lineStart + lineLen
+        val lineContent = lineIndexer.getLineContent(engine.state.text, lineIndex)
+        val spans = engine.formats.spansIn(lineStart, lineEnd)
+        val hash = contentHash(lineContent, spans, engine.searchEngine.currentIndex)
+
+        return lineCache.get(lineIndex, hash) ?: textMeasurer.measure(
+            text = buildAnnotatedString(
+                lineContent = lineContent,
+                spans = spans,
+                lineStart = lineStart,
+                lineEnd = lineEnd,
+                engine = engine,
+                colorScheme = colorScheme,
+                typography = typography
+            ),
+            style = effectiveTextStyle,
+            constraints = Constraints.fixedWidth(canvasWidth.coerceAtLeast(1)),
+            softWrap = true
+        ).also {
+            lineCache.put(lineIndex, hash, it)
         }
     }
 
@@ -340,102 +374,128 @@ fun ScribeEditor(
                                 orientation = Orientation.Vertical,
                                 state = scrollableState
                             )
-                            .pointerInput(engine) {
-                                detectTapGestures(
-                                    onTap = { tapOffset ->
-                                        val docY = tapOffset.y + scrollY
+                            .pointerInput(engine, effectiveTextStyle) {
+                                var lastTapTime = 0L
+                                var lastTapOffset = Offset.Zero
+                                val doubleTapTimeout = viewConfiguration.doubleTapTimeoutMillis
+                                val doubleTapMinTime = viewConfiguration.doubleTapMinTimeMillis
+                                val touchSlop = viewConfiguration.touchSlop
+                                val longPressTimeout = viewConfiguration.longPressTimeoutMillis
+
+                                awaitEachGesture {
+                                    // 1. Immediately cancel any running programmatic scroll animations on finger down
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    scrollAnimationJob?.cancel()
+                                    scrollAnimationJob = null
+                                    cursorVisible = true
+
+                                    val downPos = down.position
+                                    val downTime = System.currentTimeMillis()
+
+                                    val isDoubleTap = (downTime - lastTapTime in doubleTapMinTime..doubleTapTimeout) &&
+                                            ((downPos - lastTapOffset).getDistance() <= touchSlop * 2f)
+
+                                    if (isDoubleTap) {
+                                        down.consume()
+                                        lastTapTime = 0L
+
+                                        val docY = downPos.y + scrollY
                                         val lineIndex = layoutTracker.findLineAt(docY)
                                         val lineStart = lineIndexer.lineStart(lineIndex)
-                                        val lineContent = lineIndexer.getLineContent(engine.state.text, lineIndex)
-                                        val spans = engine.formats.spansIn(lineStart, lineStart + lineContent.length)
-                                        val hash = contentHash(lineContent, spans, engine.searchEngine.currentIndex)
-                                        val layoutResult = lineCache.get(lineIndex, hash)
-
+                                        val layoutResult = getOrMeasureLineLayout(lineIndex, size.width)
                                         val lineTop = layoutTracker.getLineTop(lineIndex)
                                         val localY = docY - lineTop
-                                        val charInLine = layoutResult
-                                            ?.getOffsetForPosition(Offset(tapOffset.x, localY))
-                                            ?: lineContent.length
-
-                                        val targetPos = (lineStart + charInLine).coerceIn(0, engine.state.text.length)
-                                        engine.state.edit {
-                                            selection = TextRange(targetPos)
-                                        }
-                                        focusRequester.requestFocus()
-                                        keyboardController?.show()
-                                    },
-                                    onDoubleTap = { tapOffset ->
-                                        val docY = tapOffset.y + scrollY
-                                        val lineIndex = layoutTracker.findLineAt(docY)
-                                        val lineStart = lineIndexer.lineStart(lineIndex)
-                                        val lineContent = lineIndexer.getLineContent(engine.state.text, lineIndex)
-                                        val spans = engine.formats.spansIn(lineStart, lineStart + lineContent.length)
-                                        val hash = contentHash(lineContent, spans, engine.searchEngine.currentIndex)
-                                        val layoutResult = lineCache.get(lineIndex, hash)
-
-                                        val lineTop = layoutTracker.getLineTop(lineIndex)
-                                        val localY = docY - lineTop
-                                        val charInLine = layoutResult
-                                            ?.getOffsetForPosition(Offset(tapOffset.x, localY))
-                                            ?: (lineContent.length / 2)
-
+                                        val charInLine = layoutResult.getOffsetForPosition(Offset(downPos.x, localY))
                                         val targetPos = (lineStart + charInLine).coerceIn(0, engine.state.text.length)
                                         val wordRange = selectWordAt(engine.state.text, targetPos)
+
                                         engine.state.edit {
                                             selection = wordRange
                                         }
                                         focusRequester.requestFocus()
                                         keyboardController?.show()
+                                        return@awaitEachGesture
                                     }
-                                )
-                            }
-                            .pointerInput(engine) {
-                                detectDragGesturesAfterLongPress(
-                                    onDragStart = { startOffset ->
-                                        val docY = startOffset.y + scrollY
+
+                                    // Check if this gesture turns into a tap, long press, or scroll
+                                    var pointerMovedBeyondSlop = false
+                                    val tapUpOrNull = withTimeoutOrNull(longPressTimeout) {
+                                        while (true) {
+                                            val event = awaitPointerEvent(PointerEventPass.Main)
+                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                            if (!change.pressed) {
+                                                // Finger lifted before long-press timeout!
+                                                return@withTimeoutOrNull change
+                                            }
+                                            if ((change.position - downPos).getDistance() > touchSlop) {
+                                                pointerMovedBeyondSlop = true
+                                                // Finger moved beyond touch slop -> user is scrolling, yield to scrollable!
+                                                return@withTimeoutOrNull null
+                                            }
+                                        }
+                                        null
+                                    }
+
+                                    if (pointerMovedBeyondSlop) {
+                                        // Scrolling is handled natively by Modifier.scrollable
+                                        return@awaitEachGesture
+                                    }
+
+                                    if (tapUpOrNull != null) {
+                                        // Finger lifted -> ZERO-LATENCY SINGLE TAP
+                                        tapUpOrNull.consume()
+                                        lastTapTime = downTime
+                                        lastTapOffset = downPos
+
+                                        val docY = downPos.y + scrollY
                                         val lineIndex = layoutTracker.findLineAt(docY)
                                         val lineStart = lineIndexer.lineStart(lineIndex)
-                                        val lineContent = lineIndexer.getLineContent(engine.state.text, lineIndex)
-                                        val spans = engine.formats.spansIn(lineStart, lineStart + lineContent.length)
-                                        val hash = contentHash(lineContent, spans, engine.searchEngine.currentIndex)
-                                        val layoutResult = lineCache.get(lineIndex, hash)
-
+                                        val layoutResult = getOrMeasureLineLayout(lineIndex, size.width)
                                         val lineTop = layoutTracker.getLineTop(lineIndex)
                                         val localY = docY - lineTop
-                                        val charInLine = layoutResult
-                                            ?.getOffsetForPosition(Offset(startOffset.x, localY))
-                                            ?: lineContent.length
+                                        val charInLine = layoutResult.getOffsetForPosition(Offset(downPos.x, localY))
+                                        val targetPos = (lineStart + charInLine).coerceIn(0, engine.state.text.length)
 
+                                        engine.state.edit {
+                                            selection = TextRange(targetPos)
+                                        }
+                                        focusRequester.requestFocus()
+                                        keyboardController?.show()
+                                    } else {
+                                        // Long press detected -> start drag selection!
+                                        val docY = downPos.y + scrollY
+                                        val lineIndex = layoutTracker.findLineAt(docY)
+                                        val lineStart = lineIndexer.lineStart(lineIndex)
+                                        val layoutResult = getOrMeasureLineLayout(lineIndex, size.width)
+                                        val lineTop = layoutTracker.getLineTop(lineIndex)
+                                        val localY = docY - lineTop
+                                        val charInLine = layoutResult.getOffsetForPosition(Offset(downPos.x, localY))
                                         val anchor = (lineStart + charInLine).coerceIn(0, engine.state.text.length)
                                         dragAnchorOffset = anchor
                                         engine.state.edit { selection = TextRange(anchor) }
-                                    },
-                                    onDrag = { change, _ ->
-                                        change.consume()
-                                        if (dragAnchorOffset >= 0) {
-                                            val docY = change.position.y + scrollY
-                                            val lineIndex = layoutTracker.findLineAt(docY)
-                                            val lineStart = lineIndexer.lineStart(lineIndex)
-                                            val lineContent = lineIndexer.getLineContent(engine.state.text, lineIndex)
-                                            val spans = engine.formats.spansIn(lineStart, lineStart + lineContent.length)
-                                            val hash = contentHash(lineContent, spans, engine.searchEngine.currentIndex)
-                                            val layoutResult = lineCache.get(lineIndex, hash)
 
-                                            val lineTop = layoutTracker.getLineTop(lineIndex)
-                                            val localY = docY - lineTop
-                                            val charInLine = layoutResult
-                                                ?.getOffsetForPosition(Offset(change.position.x, localY))
-                                                ?: lineContent.length
+                                        while (true) {
+                                            val event = awaitPointerEvent(PointerEventPass.Main)
+                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                            if (!change.pressed) break
+                                            change.consume()
 
-                                            val currentPos = (lineStart + charInLine).coerceIn(0, engine.state.text.length)
+                                            val dragDocY = change.position.y + scrollY
+                                            val dragLineIdx = layoutTracker.findLineAt(dragDocY)
+                                            val dragLineStart = lineIndexer.lineStart(dragLineIdx)
+                                            val dragLayout = getOrMeasureLineLayout(dragLineIdx, size.width)
+                                            val dragLineTop = layoutTracker.getLineTop(dragLineIdx)
+                                            val dragLocalY = dragDocY - dragLineTop
+                                            val dragChar = dragLayout.getOffsetForPosition(Offset(change.position.x, dragLocalY))
+                                            val currentPos = (dragLineStart + dragChar).coerceIn(0, engine.state.text.length)
+
                                             engine.state.edit {
                                                 selection = TextRange(dragAnchorOffset, currentPos)
                                             }
                                         }
-                                    },
-                                    onDragEnd = { dragAnchorOffset = -1 },
-                                    onDragCancel = { dragAnchorOffset = -1 }
-                                )
+                                        dragAnchorOffset = -1
+                                    }
+                                }
                             }
                     ) {
                         val currentScrollY = scrollY
@@ -454,28 +514,8 @@ fun ScribeEditor(
                                 val lineStart = lineIndexer.lineStart(lineIndex)
                                 val lineLen = lineIndexer.lineLength(lineIndex)
                                 val lineEnd = lineStart + lineLen
-                                val lineContent = lineIndexer.getLineContent(engine.state.text, lineIndex)
-                                val spans = engine.formats.spansIn(lineStart, lineEnd)
-                                val hash = contentHash(lineContent, spans, searchVersion)
 
-                                val layoutResult = lineCache.get(lineIndex, hash)
-                                    ?: textMeasurer.measure(
-                                        text = buildAnnotatedString(
-                                            lineContent = lineContent,
-                                            spans = spans,
-                                            lineStart = lineStart,
-                                            lineEnd = lineEnd,
-                                            engine = engine,
-                                            colorScheme = colorScheme,
-                                            typography = typography
-                                        ),
-                                        style = effectiveTextStyle,
-                                        constraints = Constraints.fixedWidth(size.width.toInt().coerceAtLeast(1)),
-                                        softWrap = true
-                                    ).also {
-                                        lineCache.put(lineIndex, hash, it)
-                                    }
-
+                                val layoutResult = getOrMeasureLineLayout(lineIndex, size.width.toInt())
                                 layoutTracker.updateHeight(lineIndex, layoutResult.size.height.toFloat())
                                 val lineTopY = layoutTracker.getLineTop(lineIndex)
 
