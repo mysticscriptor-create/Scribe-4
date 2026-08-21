@@ -53,6 +53,7 @@ class ScribeEditorEngine(
 
     val buffer = DocumentBuffer(initialContent)
     val lineIndexer = FastLineIndexer().apply { index(initialContent) }
+    val formats = FormatRegistry()
     val undoStack = UndoManager(limit = 200)
 
     // ── Unified Text & Selection State (Main Thread Text State) ───────────
@@ -213,6 +214,13 @@ class ScribeEditorEngine(
 
         val deleteLen = suffixOld - prefix
         val insertText = newText.substring(prefix, suffixNew)
+
+        if (deleteLen > 0) {
+            formats.adjustForDelete(prefix, deleteLen)
+        }
+        if (insertText.isNotEmpty()) {
+            formats.adjustForInsert(prefix, insertText.length)
+        }
 
         if (deleteLen > 0 || insertText.isNotEmpty()) {
             val cursorLine = lineIndexer.lineIndexForOffset(prefix)
@@ -434,16 +442,16 @@ class ScribeEditorEngine(
             s = sel.min
             e = sel.max
         }
-        if (s >= e) return
-        applyOrToggleFormat(type, s, e)
+        if (s >= e && type != FormatType.SCENE_SEPARATOR) return
+        formats.toggleSpan(type, s, e)
         notifyMutation()
     }
 
     fun toggleFormat(type: FormatType, selStart: Int, selEnd: Int) {
         val s = minOf(selStart, selEnd).coerceIn(0, state.text.length)
         val e = maxOf(selStart, selEnd).coerceIn(0, state.text.length)
-        if (s >= e) return
-        applyOrToggleFormat(type, s, e)
+        if (s >= e && type != FormatType.SCENE_SEPARATOR) return
+        formats.toggleSpan(type, s, e)
         notifyMutation()
     }
 
@@ -452,31 +460,9 @@ class ScribeEditorEngine(
         val validLine = lineIndex.coerceIn(0, (totalLines - 1).coerceAtLeast(0))
         val s = lineIndexer.lineStart(validLine)
         val e = s + lineIndexer.lineLength(validLine)
-        if (s >= e) return
-        applyOrToggleFormat(type, s, e)
+        if (s >= e && type != FormatType.SCENE_SEPARATOR) return
+        formats.toggleSpan(type, s, e)
         notifyMutation()
-    }
-
-    private fun applyOrToggleFormat(type: FormatType, start: Int, end: Int) {
-        state.edit {
-            val styles = getSpanStyles()
-            val matchingRanges = styles.filter { range ->
-                val rangeType = spanStyleToFormatType(range.item)
-                rangeType == type && range.start <= start && range.end >= end
-            }
-
-            if (matchingRanges.isNotEmpty()) {
-                matchingRanges.forEach { it.clearStyle() }
-            } else {
-                if (type.isHeading()) {
-                    styles.filter { range ->
-                        val rangeType = spanStyleToFormatType(range.item)
-                        rangeType?.isHeading() == true && range.start < end && range.end > start
-                    }.forEach { it.clearStyle() }
-                }
-                addStyle(type.toSpanStyle(), start, end)
-            }
-        }
     }
 
     fun requestLineFocus(lineIndex: Int, column: Int = -1) {
@@ -575,20 +561,10 @@ class ScribeEditorEngine(
     fun exportPlainText(): String = state.text.toString()
 
     fun exportWithFormats(): SerializedDocument {
-        val text = state.text.toString()
-        val styles = state.textStyles
-        val spans = styles.mapNotNull { trackedRange ->
-            val spanType = spanStyleToFormatType(trackedRange.item)
-            if (spanType != null) {
-                SerializedSpan(spanType.name, trackedRange.start, trackedRange.end)
-            } else {
-                null
-            }
-        }
         return SerializedDocument(
             version = 2,
-            plainText = text,
-            spans = spans
+            plainText = state.text.toString(),
+            spans = formats.exportAll().map { it.toSerializedSpan() }
         )
     }
 
@@ -603,17 +579,16 @@ class ScribeEditorEngine(
         state.edit {
             replace(0, length, plainText)
             selection = TextRange(0)
-            doc.spans.forEach { span ->
-                try {
-                    val type = FormatType.valueOf(span.type)
-                    val s = span.start.coerceIn(0, plainText.length)
-                    val e = span.end.coerceIn(0, plainText.length)
-                    if (s < e) {
-                        addStyle(type.toSpanStyle(), s, e)
-                    }
-                } catch (_: Exception) {}
+        }
+
+        val loadedSpans = doc.spans.mapNotNull { span ->
+            try {
+                FormatSpan(FormatType.valueOf(span.type), span.start, span.end)
+            } catch (_: Exception) {
+                null
             }
         }
+        formats.loadAll(loadedSpans)
 
         undoStack.clear()
         searchEngine.clear()
@@ -644,21 +619,16 @@ class ScribeEditorEngine(
 
                 val lineStart = lineIndexer.lineStart(i)
                 val lineEnd = lineStart + content.length
-                val headingStyle = state.textStyles.firstOrNull {
-                    it.end > lineStart && it.start < lineEnd && spanStyleToFormatType(it.item)?.isHeading() == true
-                }
+                val headingSpan = formats.spansIn(lineStart, lineEnd).firstOrNull { it.type.isHeading() }
 
-                if (headingStyle != null) {
-                    val formatType = spanStyleToFormatType(headingStyle.item)
-                    if (formatType != null && formatType.isHeading()) {
-                        entries.add(
-                            OutlineEntry(
-                                level = formatType.headingLevel(),
-                                text = content,
-                                lineIndex = i
-                            )
+                if (headingSpan != null) {
+                    entries.add(
+                        OutlineEntry(
+                            level = headingSpan.type.headingLevel(),
+                            text = content,
+                            lineIndex = i
                         )
-                    }
+                    )
                 } else if (content.startsWith("#")) {
                     // Markdown heading fallback (# H1, ## H2, ### H3)
                     val hashes = content.takeWhile { it == '#' }

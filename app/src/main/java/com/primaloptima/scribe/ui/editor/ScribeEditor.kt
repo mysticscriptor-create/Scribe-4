@@ -58,7 +58,9 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.primaloptima.scribe.engine.FastLineIndexer
+import com.primaloptima.scribe.engine.FormatSpan
 import com.primaloptima.scribe.engine.ScribeEditorEngine
+import com.primaloptima.scribe.engine.toSpanStyle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -341,10 +343,8 @@ fun ScribeEditor(
                                         val lineIndex = layoutTracker.findLineAt(docY)
                                         val lineStart = lineIndexer.lineStart(lineIndex)
                                         val lineContent = lineIndexer.getLineContent(engine.state.text, lineIndex)
-                                        val lineStyles = engine.state.textStyles.filter {
-                                            it.end > lineStart && it.start < lineStart + lineContent.length
-                                        }
-                                        val hash = contentHash(lineContent, lineStyles, engine.searchEngine.currentIndex)
+                                        val spans = engine.formats.spansIn(lineStart, lineStart + lineContent.length)
+                                        val hash = contentHash(lineContent, spans, engine.searchEngine.currentIndex)
                                         val layoutResult = lineCache.get(lineIndex, hash)
 
                                         val lineTop = layoutTracker.getLineTop(lineIndex)
@@ -365,10 +365,8 @@ fun ScribeEditor(
                                         val lineIndex = layoutTracker.findLineAt(docY)
                                         val lineStart = lineIndexer.lineStart(lineIndex)
                                         val lineContent = lineIndexer.getLineContent(engine.state.text, lineIndex)
-                                        val lineStyles = engine.state.textStyles.filter {
-                                            it.end > lineStart && it.start < lineStart + lineContent.length
-                                        }
-                                        val hash = contentHash(lineContent, lineStyles, engine.searchEngine.currentIndex)
+                                        val spans = engine.formats.spansIn(lineStart, lineStart + lineContent.length)
+                                        val hash = contentHash(lineContent, spans, engine.searchEngine.currentIndex)
                                         val layoutResult = lineCache.get(lineIndex, hash)
 
                                         val lineTop = layoutTracker.getLineTop(lineIndex)
@@ -394,10 +392,8 @@ fun ScribeEditor(
                                         val lineIndex = layoutTracker.findLineAt(docY)
                                         val lineStart = lineIndexer.lineStart(lineIndex)
                                         val lineContent = lineIndexer.getLineContent(engine.state.text, lineIndex)
-                                        val lineStyles = engine.state.textStyles.filter {
-                                            it.end > lineStart && it.start < lineStart + lineContent.length
-                                        }
-                                        val hash = contentHash(lineContent, lineStyles, engine.searchEngine.currentIndex)
+                                        val spans = engine.formats.spansIn(lineStart, lineStart + lineContent.length)
+                                        val hash = contentHash(lineContent, spans, engine.searchEngine.currentIndex)
                                         val layoutResult = lineCache.get(lineIndex, hash)
 
                                         val lineTop = layoutTracker.getLineTop(lineIndex)
@@ -417,10 +413,8 @@ fun ScribeEditor(
                                             val lineIndex = layoutTracker.findLineAt(docY)
                                             val lineStart = lineIndexer.lineStart(lineIndex)
                                             val lineContent = lineIndexer.getLineContent(engine.state.text, lineIndex)
-                                            val lineStyles = engine.state.textStyles.filter {
-                                                it.end > lineStart && it.start < lineStart + lineContent.length
-                                            }
-                                            val hash = contentHash(lineContent, lineStyles, engine.searchEngine.currentIndex)
+                                            val spans = engine.formats.spansIn(lineStart, lineStart + lineContent.length)
+                                            val hash = contentHash(lineContent, spans, engine.searchEngine.currentIndex)
                                             val layoutResult = lineCache.get(lineIndex, hash)
 
                                             val lineTop = layoutTracker.getLineTop(lineIndex)
@@ -457,16 +451,14 @@ fun ScribeEditor(
                                 val lineLen = lineIndexer.lineLength(lineIndex)
                                 val lineEnd = lineStart + lineLen
                                 val lineContent = lineIndexer.getLineContent(engine.state.text, lineIndex)
-                                val lineStyles = engine.state.textStyles.filter {
-                                    it.end > lineStart && it.start < lineEnd
-                                }
-                                val hash = contentHash(lineContent, lineStyles, searchVersion)
+                                val spans = engine.formats.spansIn(lineStart, lineEnd)
+                                val hash = contentHash(lineContent, spans, searchVersion)
 
                                 val layoutResult = lineCache.get(lineIndex, hash)
                                     ?: textMeasurer.measure(
                                         text = buildAnnotatedString(
                                             lineContent = lineContent,
-                                            lineStyles = lineStyles,
+                                            spans = spans,
                                             lineStart = lineStart,
                                             lineEnd = lineEnd,
                                             engine = engine,
@@ -556,7 +548,7 @@ private fun isWordChar(c: Char): Boolean = c.isLetterOrDigit() || c == '_'
  */
 private fun buildAnnotatedString(
     lineContent: String,
-    lineStyles: List<androidx.compose.foundation.text.input.TrackedRange<SpanStyle>>,
+    spans: List<FormatSpan>,
     lineStart: Int,
     lineEnd: Int,
     engine: ScribeEditorEngine,
@@ -566,12 +558,12 @@ private fun buildAnnotatedString(
     append(lineContent)
 
     // 1. Formatting Spans
-    for (tracked in lineStyles) {
-        val localStart = (tracked.start - lineStart).coerceIn(0, lineContent.length)
-        val localEnd = (tracked.end - lineStart).coerceIn(0, lineContent.length)
+    for (span in spans) {
+        val localStart = (span.start - lineStart).coerceIn(0, lineContent.length)
+        val localEnd = (span.end - lineStart).coerceIn(0, lineContent.length)
         if (localStart < localEnd) {
             addStyle(
-                style = tracked.item,
+                style = span.type.toSpanStyle(colorScheme, typography),
                 start = localStart,
                 end = localEnd
             )
