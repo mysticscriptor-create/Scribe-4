@@ -133,28 +133,29 @@ class ScribeEditorEngine(
         extractOutlineAsync(initialContent)
         runProseAnalysisAsync(initialContent)
 
-        // 1. Debounced text diffing and line indexer cache update on worker threads
+        // 1. Synchronous main-thread line indexer and selection sync
+        snapshotFlow { state.text }
+            .onEach { textSnapshot ->
+                lineIndexer.index(textSnapshot)
+                _lineCount.intValue = lineIndexer.lineCount
+                _documentRevision.intValue++
+                syncSelectionFromUI(state.selection)
+            }
+            .launchIn(viewModelScope)
+
+        // 2. Debounced text diffing and undo recording on worker threads
         snapshotFlow { state.text.toString() }
             .drop(1)
-            .debounce(150)
+            .debounce(200)
             .onEach { textSnapshot ->
                 val oldText = lastRecordedText
                 if (oldText != textSnapshot) {
                     recordTextDiff(oldText, textSnapshot)
                     lastRecordedText = textSnapshot
-                    lineIndexer.index(textSnapshot)
-                    _lineCount.intValue = lineIndexer.lineCount
                     notifyMutation()
                 }
             }
             .flowOn(Dispatchers.Default)
-            .launchIn(viewModelScope)
-
-        // 2. Selection changes: calculate line index lightly without blocking
-        snapshotFlow { state.selection }
-            .onEach { sel ->
-                syncSelectionFromUI(sel)
-            }
             .launchIn(viewModelScope)
 
         // 3. Debounced word and char count computation on worker threads

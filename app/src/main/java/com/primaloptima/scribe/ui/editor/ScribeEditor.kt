@@ -70,9 +70,10 @@ import kotlinx.coroutines.launch
  * Dynamic per-line height & cumulative Y-offset tracker.
  * Reuses internal primitive arrays to eliminate GC pressure during typing and scrolling.
  */
-class LineLayoutTracker(private val defaultLineHeight: Float, private val charsPerLine: Int = 45) {
+class LineLayoutTracker(private val defaultLineHeight: Float, private val charsPerLine: Int = 38) {
     private var heights = FloatArray(512)
     private var offsets = FloatArray(512)
+    private var isMeasured = BooleanArray(512)
     var count: Int = 0
         private set
     private var dirty: Boolean = true
@@ -84,26 +85,32 @@ class LineLayoutTracker(private val defaultLineHeight: Float, private val charsP
             val newCap = maxOf(lineCount + 128, heights.size * 2)
             heights = heights.copyOf(newCap)
             offsets = offsets.copyOf(newCap)
+            isMeasured = isMeasured.copyOf(newCap)
         }
 
-        if (count != lineCount) {
-            for (i in 0 until lineCount) {
-                if (i >= count || heights[i] <= 0f) {
+        val countChanged = (count != lineCount)
+        for (i in 0 until lineCount) {
+            if (countChanged || !isMeasured[i] || heights[i] <= 0f) {
+                if (!isMeasured[i]) {
                     val len = indexer.lineLength(i)
                     val estLines = (len / charsPerLine).coerceAtLeast(1)
                     heights[i] = estLines * defaultLineHeight
                 }
             }
-            count = lineCount
-            dirty = true
         }
+        count = lineCount
+        dirty = true
     }
 
     fun updateHeight(lineIndex: Int, height: Float): Boolean {
-        if (lineIndex in 0 until count && heights[lineIndex] != height) {
-            heights[lineIndex] = height
-            dirty = true
-            return true
+        if (lineIndex in 0 until count) {
+            val diff = kotlin.math.abs(heights[lineIndex] - height)
+            if (!isMeasured[lineIndex] || diff > 0.5f) {
+                heights[lineIndex] = height
+                isMeasured[lineIndex] = true
+                dirty = true
+                return true
+            }
         }
         return false
     }
@@ -148,12 +155,12 @@ class LineLayoutTracker(private val defaultLineHeight: Float, private val charsP
 
     fun findFirstVisible(scrollY: Float): Int {
         val line = findLineAt(scrollY.coerceAtLeast(0f))
-        return (line - 1).coerceIn(0, (count - 1).coerceAtLeast(0))
+        return (line - 2).coerceIn(0, (count - 1).coerceAtLeast(0))
     }
 
     fun findLastVisible(bottomY: Float): Int {
         val line = findLineAt(bottomY.coerceAtLeast(0f))
-        return (line + 1).coerceIn(0, (count - 1).coerceAtLeast(0))
+        return (line + 2).coerceIn(0, (count - 1).coerceAtLeast(0))
     }
 }
 
@@ -200,14 +207,14 @@ fun ScribeEditor(
     val lineIndexer = engine.lineIndexer
     val layoutTracker = remember(lineHeightPx) { LineLayoutTracker(lineHeightPx) }
 
-    // Synchronize layout tracker with engine's line indexer
+    // Ensure line indexer and layout tracker are immediately in sync
+    lineIndexer.index(engine.state.text)
     layoutTracker.sync(lineIndexer)
 
-    // Invalidate line cache from cursor line upon text updates
+    // Synchronize line indexer and layout tracker on text change
     LaunchedEffect(engine.state.text) {
-        val cursorPos = engine.state.selection.start
-        val cursorLine = lineIndexer.lineIndexForOffset(cursorPos)
-        lineCache.invalidateFrom(cursorLine)
+        lineIndexer.index(engine.state.text)
+        layoutTracker.sync(lineIndexer)
     }
 
     val coroutineScope = rememberCoroutineScope()
@@ -217,21 +224,18 @@ fun ScribeEditor(
     var scrollAnimationJob by remember { mutableStateOf<Job?>(null) }
 
     val bottomPaddingPx = with(density) { 320.dp.toPx() }
-    val totalHeightPx = layoutTracker.getTotalHeight() + bottomPaddingPx
-    val maxScrollY = (totalHeightPx - viewportHeightPx).coerceAtLeast(0f)
 
-    // Ensure scrollY stays clamped when document height changes
-    LaunchedEffect(maxScrollY) {
-        if (scrollY > maxScrollY) {
-            scrollY = maxScrollY
-        }
+    fun computeMaxScrollY(): Float {
+        val total = layoutTracker.getTotalHeight() + bottomPaddingPx
+        return (total - viewportHeightPx).coerceAtLeast(0f)
     }
 
-    // High-performance virtual scrollable state with native Android fling & drag physics
+    // High-performance virtual scrollable state with dynamic document-height clamping
     val scrollableState = rememberScrollableState { delta ->
         scrollAnimationJob?.cancel()
+        val currentMax = computeMaxScrollY()
         val oldScroll = scrollY
-        val newScroll = (oldScroll - delta).coerceIn(0f, maxScrollY)
+        val newScroll = (oldScroll - delta).coerceIn(0f, currentMax)
         scrollY = newScroll
         oldScroll - newScroll
     }
@@ -239,13 +243,13 @@ fun ScribeEditor(
     fun animateScrollTo(targetY: Float) {
         scrollAnimationJob?.cancel()
         scrollAnimationJob = coroutineScope.launch {
-            val target = targetY.coerceIn(0f, maxScrollY)
             val animatable = Animatable(scrollY, Float.VectorConverter)
             animatable.animateTo(
-                targetValue = target,
+                targetValue = targetY,
                 animationSpec = spring(stiffness = 650f, dampingRatio = 0.85f)
             ) {
-                scrollY = value.coerceIn(0f, maxScrollY)
+                val stepMax = computeMaxScrollY()
+                scrollY = value.coerceIn(0f, stepMax)
             }
         }
     }
@@ -504,10 +508,11 @@ fun ScribeEditor(
                         }
 
                         // Minimal Elegant Scrollbar Indicator
-                        if (maxScrollY > 0f && vh > 0f) {
-                            val thumbHeight = (vh * (vh / (maxScrollY + vh)))
+                        val maxScroll = computeMaxScrollY()
+                        if (maxScroll > 0f && vh > 0f) {
+                            val thumbHeight = (vh * (vh / (maxScroll + vh)))
                                 .coerceIn(32.dp.toPx(), vh / 4)
-                            val scrollRatio = (currentScrollY / maxScrollY).coerceIn(0f, 1f)
+                            val scrollRatio = (currentScrollY / maxScroll).coerceIn(0f, 1f)
                             val thumbTop = scrollRatio * (vh - thumbHeight)
 
                             drawRoundRect(
