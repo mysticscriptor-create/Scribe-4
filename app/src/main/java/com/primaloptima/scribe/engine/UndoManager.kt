@@ -1,15 +1,17 @@
 package com.primaloptima.scribe.engine
 
 data class UndoEntry(
-    val bufferEdit: Edit,
-    val cursorBefore: CursorPos,
-    val cursorAfter: CursorPos,
+    val bufferEdit: Edit? = null,
+    val formatEdit: FormatEdit? = null,
+    val cursorBefore: CursorPos = CursorPos(0, 0),
+    val cursorAfter: CursorPos = CursorPos(0, 0),
     val timestamp: Long = System.currentTimeMillis(),
     val label: String = ""
 )
 
 /**
  * 200-step undo/redo stack manager with smart 500ms typing-grouping and snapshot checkpoints.
+ * Supports synchronized undo/redo of both text buffer mutations and rich formatting spans.
  */
 class UndoManager(val limit: Int = 200) {
     private val undoStack = ArrayDeque<UndoEntry>()
@@ -25,14 +27,18 @@ class UndoManager(val limit: Int = 200) {
             val last = undoStack.last()
             val timeDiff = entry.timestamp - last.timestamp
 
-            // Merge typing keystrokes within 500ms if contiguous single-char inserts or deletes
-            if (timeDiff < 500 && last.label.isEmpty() && entry.label.isEmpty()) {
+            // Merge typing keystrokes within 500ms if contiguous single-char inserts or deletes without format changes
+            if (timeDiff < 500 && last.label.isEmpty() && entry.label.isEmpty() &&
+                last.formatEdit == null && entry.formatEdit == null &&
+                last.bufferEdit != null && entry.bufferEdit != null
+            ) {
                 val mergedBufferEdit = tryMergeEdits(last.bufferEdit, entry.bufferEdit)
                 if (mergedBufferEdit != null) {
                     undoStack.removeLast()
                     undoStack.addLast(
                         UndoEntry(
                             bufferEdit = mergedBufferEdit,
+                            formatEdit = null,
                             cursorBefore = last.cursorBefore,
                             cursorAfter = entry.cursorAfter,
                             timestamp = entry.timestamp
@@ -91,3 +97,4 @@ class UndoManager(val limit: Int = 200) {
         redoStack.clear()
     }
 }
+

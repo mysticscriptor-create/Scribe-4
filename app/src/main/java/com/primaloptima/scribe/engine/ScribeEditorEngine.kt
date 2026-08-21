@@ -26,8 +26,10 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 
 data class LineFocusRequest(
     val lineIndex: Int,
@@ -443,7 +445,11 @@ class ScribeEditorEngine(
             e = sel.max
         }
         if (s >= e && type != FormatType.SCENE_SEPARATOR) return
-        formats.toggleSpan(type, s, e)
+        val formatEdit = formats.toggleSpan(type, s, e)
+        val lineIdx = lineIndexer.lineIndexForOffset(s)
+        val lineStart = lineIndexer.lineStart(lineIdx)
+        val cursorPos = CursorPos(lineIdx, (s - lineStart).coerceAtLeast(0))
+        undoStack.push(UndoEntry(formatEdit = formatEdit, cursorBefore = cursorPos, cursorAfter = cursorPos))
         notifyMutation()
     }
 
@@ -451,7 +457,11 @@ class ScribeEditorEngine(
         val s = minOf(selStart, selEnd).coerceIn(0, state.text.length)
         val e = maxOf(selStart, selEnd).coerceIn(0, state.text.length)
         if (s >= e && type != FormatType.SCENE_SEPARATOR) return
-        formats.toggleSpan(type, s, e)
+        val formatEdit = formats.toggleSpan(type, s, e)
+        val lineIdx = lineIndexer.lineIndexForOffset(s)
+        val lineStart = lineIndexer.lineStart(lineIdx)
+        val cursorPos = CursorPos(lineIdx, (s - lineStart).coerceAtLeast(0))
+        undoStack.push(UndoEntry(formatEdit = formatEdit, cursorBefore = cursorPos, cursorAfter = cursorPos))
         notifyMutation()
     }
 
@@ -461,7 +471,9 @@ class ScribeEditorEngine(
         val s = lineIndexer.lineStart(validLine)
         val e = s + lineIndexer.lineLength(validLine)
         if (s >= e && type != FormatType.SCENE_SEPARATOR) return
-        formats.toggleSpan(type, s, e)
+        val formatEdit = formats.toggleSpan(type, s, e)
+        val cursorPos = CursorPos(validLine, 0)
+        undoStack.push(UndoEntry(formatEdit = formatEdit, cursorBefore = cursorPos, cursorAfter = cursorPos))
         notifyMutation()
     }
 
@@ -535,7 +547,8 @@ class ScribeEditorEngine(
 
     fun undo() {
         val entry = undoStack.undo() ?: return
-        applyInverseEditToState(entry.bufferEdit)
+        entry.bufferEdit?.let { applyInverseEditToState(it) }
+        entry.formatEdit?.let { formats.invertFormatEdit(it) }
         val targetPos = (lineIndexer.lineStart(entry.cursorBefore.line) + entry.cursorBefore.column)
             .coerceIn(0, state.text.length)
         state.edit { selection = TextRange(targetPos) }
@@ -544,7 +557,8 @@ class ScribeEditorEngine(
 
     fun redo() {
         val entry = undoStack.redo() ?: return
-        applyEditToState(entry.bufferEdit)
+        entry.bufferEdit?.let { applyEditToState(it) }
+        entry.formatEdit?.let { formats.applyFormatEdit(it) }
         val targetPos = (lineIndexer.lineStart(entry.cursorAfter.line) + entry.cursorAfter.column)
             .coerceIn(0, state.text.length)
         state.edit { selection = TextRange(targetPos) }
@@ -614,6 +628,7 @@ class ScribeEditorEngine(
             val entries = mutableListOf<OutlineEntry>()
 
             for (i in 0 until totalLines) {
+                coroutineContext.ensureActive()
                 val content = lineIndexer.getLineContent(text, i).trim()
                 if (content.isEmpty()) continue
 

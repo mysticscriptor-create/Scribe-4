@@ -2,8 +2,10 @@ package com.primaloptima.scribe.engine
 
 import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import kotlin.coroutines.coroutineContext
 import kotlin.math.roundToInt
 
 @Immutable
@@ -126,6 +128,7 @@ object ProseAnalysisEngine {
         val duplicateAdjacent = mutableListOf<DuplicateWordAlert>()
 
         for (sIdx in sentences.indices) {
+            coroutineContext.ensureActive()
             val sentence = sentences[sIdx]
             val sWords = extractWords(sentence)
             sentenceLengths.add(sWords.size)

@@ -106,6 +106,21 @@ class FormatRegistry {
         return FormatEdit.Modified(before, after)
     }
 
+    /**
+     * Iterates across spans intersecting [start, end) without intermediate list allocations.
+     */
+    inline fun forEachSpanIn(start: Int, end: Int, action: (FormatSpan) -> Unit) {
+        val s = minOf(start, end)
+        val e = maxOf(start, end)
+        if (spans.isEmpty() || s >= e) return
+        for (i in 0 until spans.size) {
+            val span = spans[i]
+            if (span.start < e && span.end > s) {
+                action(span)
+            }
+        }
+    }
+
     fun spansIn(start: Int, end: Int): List<FormatSpan> {
         val s = minOf(start, end)
         val e = maxOf(start, end)
@@ -118,6 +133,33 @@ class FormatRegistry {
             }
         }
         return result
+    }
+
+    /**
+     * Coalesces contiguous and overlapping spans of the exact same type.
+     */
+    fun coalesceSpans() {
+        if (spans.size <= 1) return
+        val byType = spans.groupBy { it.type }
+        val merged = mutableListOf<FormatSpan>()
+
+        for ((type, list) in byType) {
+            val sorted = list.sortedBy { it.start }
+            var cur = sorted[0].copy()
+            for (k in 1 until sorted.size) {
+                val next = sorted[k]
+                if (next.start <= cur.end) {
+                    cur = cur.copy(end = maxOf(cur.end, next.end))
+                } else {
+                    merged.add(cur)
+                    cur = next.copy()
+                }
+            }
+            merged.add(cur)
+        }
+
+        spans.clear()
+        spans.addAll(merged)
     }
 
     fun adjustForInsert(pos: Int, insertedLength: Int) {
@@ -219,7 +261,7 @@ class FormatRegistry {
     ): AnnotatedString {
         return buildAnnotatedString {
             append(text)
-            spansIn(lineStart, lineEnd).forEach { span ->
+            forEachSpanIn(lineStart, lineEnd) { span ->
                 val localStart = (span.start - lineStart).coerceIn(0, text.length)
                 val localEnd = (span.end - lineStart).coerceIn(0, text.length)
                 if (localStart < localEnd) {

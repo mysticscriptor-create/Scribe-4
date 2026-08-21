@@ -23,9 +23,10 @@ sealed class Edit {
 
 /**
  * High-performance Piece Table document buffer for prose editing.
- * Handles 100,000+ words with instant insertions, deletions, and line virtualization.
+ * Implements CharSequence for zero-copy pattern matching and handles 100,000+ words
+ * with instant insertions, deletions, and line virtualization.
  */
-class DocumentBuffer(initialContent: String = "") {
+class DocumentBuffer(initialContent: String = "") : CharSequence {
     private val original: String = initialContent
     private val appendBuf = StringBuilder()
     private val pieces = mutableListOf<Piece>()
@@ -36,7 +37,7 @@ class DocumentBuffer(initialContent: String = "") {
     // Line start index caching
     private var lineStartsCache: IntArray = intArrayOf(0)
 
-    // Piece access locality cache
+    // Piece access locality cache for O(1) sequential / nearby lookups
     private var cachedPieceIndex = 0
     private var cachedPieceOffset = 0
 
@@ -49,12 +50,25 @@ class DocumentBuffer(initialContent: String = "") {
         repeat(lineStartsCache.size) { lineKeys.add(nextLineKey++) }
     }
 
+    // ── CharSequence implementation ──────────────────────────────────────
+
+    override val length: Int
+        get() = totalLength
+
+    override fun get(index: Int): Char = charAt(index)
+
+    override fun subSequence(startIndex: Int, endIndex: Int): CharSequence {
+        return substring(startIndex, endIndex)
+    }
+
     // ── Read operations ──────────────────────────────────────────────────
 
     fun length(): Int = totalLength
 
     fun charAt(pos: Int): Char {
-        require(pos in 0 until totalLength) { "Index out of bounds: $pos (length: $totalLength)" }
+        if (pos !in 0 until totalLength) {
+            throw IndexOutOfBoundsException("Index out of bounds: $pos (length: $totalLength)")
+        }
         val (pieceIndex, localOffset) = findPieceAt(pos)
         val piece = pieces[pieceIndex]
         return when (piece.source) {
@@ -103,6 +117,8 @@ class DocumentBuffer(initialContent: String = "") {
         }
         return sb.toString()
     }
+
+    override fun toString(): String = asString()
 
     // ── Write operations ─────────────────────────────────────────────────
 
@@ -293,15 +309,14 @@ class DocumentBuffer(initialContent: String = "") {
     // ── Search ───────────────────────────────────────────────────────────
 
     fun search(query: String, caseSensitive: Boolean, isRegex: Boolean): List<Int> {
-        if (query.isEmpty()) return emptyList()
-        val fullText = asString()
+        if (query.isEmpty() || totalLength == 0) return emptyList()
         val results = mutableListOf<Int>()
 
         if (isRegex) {
             try {
                 val flags = if (caseSensitive) 0 else Pattern.CASE_INSENSITIVE
                 val pattern = Pattern.compile(query, flags)
-                val matcher = pattern.matcher(fullText)
+                val matcher = pattern.matcher(this)
                 while (matcher.find()) {
                     results.add(matcher.start())
                 }
@@ -309,12 +324,14 @@ class DocumentBuffer(initialContent: String = "") {
                 // Invalid regex pattern, fallback to empty
             }
         } else {
-            var startIndex = 0
-            while (startIndex < fullText.length) {
-                val index = fullText.indexOf(query, startIndex, ignoreCase = !caseSensitive)
-                if (index == -1) break
-                results.add(index)
-                startIndex = index + maxOf(1, query.length)
+            forEachLine { _, lineStart, lineContent ->
+                var idx = 0
+                while (idx < lineContent.length) {
+                    val found = lineContent.indexOf(query, idx, ignoreCase = !caseSensitive)
+                    if (found == -1) break
+                    results.add(lineStart + found)
+                    idx = found + maxOf(1, query.length)
+                }
             }
         }
 
@@ -397,6 +414,8 @@ class DocumentBuffer(initialContent: String = "") {
         }
         pieces.clear()
         pieces.addAll(merged)
+        cachedPieceIndex = 0
+        cachedPieceOffset = 0
     }
 
     /**
@@ -412,8 +431,25 @@ class DocumentBuffer(initialContent: String = "") {
     }
 
     private fun findPieceAt(pos: Int): Pair<Int, Int> {
+        if (pieces.isEmpty()) return Pair(0, 0)
+        
+        // Fast-path: check if pos is within currently cached piece
+        if (cachedPieceIndex in pieces.indices &&
+            pos >= cachedPieceOffset &&
+            pos < cachedPieceOffset + pieces[cachedPieceIndex].length
+        ) {
+            return Pair(cachedPieceIndex, pos - cachedPieceOffset)
+        }
+
+        // Directional scan from cached locality if possible
+        var startIndex = 0
         var currentOffset = 0
-        for (i in 0 until pieces.size) {
+        if (cachedPieceIndex in pieces.indices && pos >= cachedPieceOffset) {
+            startIndex = cachedPieceIndex
+            currentOffset = cachedPieceOffset
+        }
+
+        for (i in startIndex until pieces.size) {
             val piece = pieces[i]
             if (pos < currentOffset + piece.length) {
                 cachedPieceIndex = i
@@ -422,6 +458,7 @@ class DocumentBuffer(initialContent: String = "") {
             }
             currentOffset += piece.length
         }
+
         val lastIdx = (pieces.size - 1).coerceAtLeast(0)
         return Pair(lastIdx, if (pieces.isNotEmpty()) pieces[lastIdx].length else 0)
     }

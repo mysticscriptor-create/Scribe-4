@@ -57,7 +57,15 @@ object ScribeInputTransformation : InputTransformation {
                     }
                     replace(changeStart, changeStart + 1, smartSingleQuote.toString())
                 }
-                // 3. Auto-pair brackets
+                // 3. Smart Em-Dash: -- -> —
+                else if (insertedChar == '-' && prevChar == '-') {
+                    replace(changeStart - 1, changeStart + 1, "—")
+                }
+                // 4. Smart Ellipsis: .. + . -> …
+                else if (insertedChar == '.' && changeStart >= 2 && charAt(changeStart - 1) == '.' && charAt(changeStart - 2) == '.') {
+                    replace(changeStart - 2, changeStart + 1, "…")
+                }
+                // 5. Auto-pair brackets
                 else if (insertedChar == '(') {
                     insert(changeStart + 1, ")")
                 } else if (insertedChar == '[') {
