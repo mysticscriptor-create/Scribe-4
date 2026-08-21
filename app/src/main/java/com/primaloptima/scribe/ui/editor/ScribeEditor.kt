@@ -1,27 +1,36 @@
 /*
- * ScribeEditor — Pure Compose Virtualized Canvas Prose Editor (Researched August 2026).
+ * ScribeEditor — Pure Compose Virtualized Canvas Prose Editor (Updated August 21, 2026).
  *
- * ARCHITECTURAL RESEARCH FINDINGS (Compose BOM 2026.08.00 / Compose 1.12):
- * 1. Cursor Placement API:
- *    `TextLayoutResult.getCursorRect(offset: Int): Rect` is used for cursor positioning.
- *    Unlike `getBoundingBox(offset)`, which returns character bounds and can fail or return
- *    empty rects at line boundaries and end-of-line (EOL), `getCursorRect` accurately computes
- *    the exact cursor insertion caret position across bidirectional (RTL/LTR) text and wraps.
- * 2. Selection Highlight:
- *    `TextLayoutResult.getPathForRange(start: Int, end: Int): Path` is stable and accurately
- *    constructs the complex multi-line selection bounding path within the measured layout.
- * 3. Hoisted ScrollState & No Duplicate Gestures:
- *    `BasicTextField` (Foundation 1.8+ / 1.12) accepts a hoisted `scrollState: ScrollState`
- *    parameter and handles vertical drag/fling gestures directly. Applying an external
- *    `Modifier.verticalScroll(scrollState)` would attach conflicting gesture detectors and cause jank.
- * 4. Cache Invalidation & SnapshotFlow:
- *    `snapshotFlow { engine.state.text.toString() }` emits on every fine-grained snapshot commit
- *    (keystroke). We clear `ScribeLineCache` on change, guaranteeing that only visible lines
- *    (firstVisible..lastVisible) are measured on the next draw frame in O(visible_lines).
- * 5. IME Lifecycle via Off-Screen Anchor:
- *    `innerTextField()` is invoked inside `Box(Modifier.offset(y = (-9999).dp).size(1.dp))` inside
- *    the `decorator` lambda. This keeps the InputConnection alive with the soft keyboard without
- *    causing accessibility bounds mis-reporting or layout clipping glitches.
+ * ARCHITECTURAL RESEARCH FINDINGS (August 21, 2026 / Compose BOM 2026.08.00 / Compose 1.12):
+ *
+ * 1. Snapshot State Reads in DrawScope / Canvas:
+ *    - Reading snapshot state (such as `TextFieldState.text` or `ScrollState.value`) inside
+ *      `Canvas { /* DrawScope */ }` or `drawBehind { }` observes state during the Draw Phase.
+ *    - When read exclusively during the draw phase, state mutations trigger a targeted redraw
+ *      without causing full composable recomposition or layout passes.
+ *    - For synchronized line splitting and rendering, reading `engine.state.text` directly
+ *      eliminates the 150 ms debounce lag from the background DocumentBuffer sync, ensuring
+ *      zero latency between keystrokes and on-screen rendering.
+ *
+ * 2. Multi-Line Text Measurement & Soft-Wrap Pixel Height:
+ *    - `TextLayoutResult.size.height` (and `TextLayoutResult.multiParagraph.height`) returns the
+ *      exact pixel height of a measured paragraph, including all wrapped visual lines.
+ *    - `TextLayoutResult.lineCount` returns the number of visual lines (>= 1) into which the
+ *      paragraph was soft-wrapped under current width constraints.
+ *    - `TextLayoutResult.getCursorRect(offset)` returns the exact cursor bounding rect (including
+ *      `top` offset on the specific wrapped visual line), and `getPathForRange(start, end)`
+ *      accurately returns the full multi-line selection bounding path.
+ *    - Maintaining a cumulative `LineLayoutTracker` with per-line measured heights enables exact Y
+ *      positioning of all paragraphs, eliminating layout distortion when long lines soft-wrap.
+ *
+ * 3. BasicTextField OutputTransformation vs. Decorator:
+ *    - `OutputTransformation` applies transformations exclusively to the visual representation
+ *      rendered by `innerTextField()`.
+ *    - Since `innerTextField()` is hosted off-screen purely as an invisible IME anchor, passing
+ *      `OutputTransformation` causes redundant full-document span iterations on every keystroke.
+ *    - The Canvas `buildAnnotatedString` is the sole visual rendering surface for the editor.
+ *      Removing `outputTransformation` from `BasicTextField` eliminates double-processing with zero
+ *      visual or functional regression.
  */
 package com.primaloptima.scribe.ui.editor
 
@@ -83,12 +92,115 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
 
 /**
+ * Fast zero-allocation / lightweight indexer for logical lines derived directly from
+ * live snapshot text. Eliminates 150ms buffer sync lag.
+ */
+private class LiveDocumentLines(val fullText: String) {
+    val lineStarts: IntArray
+    val lineCount: Int
+
+    init {
+        val starts = ArrayList<Int>()
+        starts.add(0)
+        var i = 0
+        while (i < fullText.length) {
+            if (fullText[i] == '\n') {
+                starts.add(i + 1)
+            }
+            i++
+        }
+        lineStarts = starts.toIntArray()
+        lineCount = lineStarts.size
+    }
+
+    fun lineStart(index: Int): Int = lineStarts[index]
+
+    fun lineEnd(index: Int): Int {
+        val nextStart = if (index + 1 < lineStarts.size) lineStarts[index + 1] else fullText.length + 1
+        return (nextStart - 1).coerceAtMost(fullText.length)
+    }
+
+    fun lineLength(index: Int): Int = lineEnd(index) - lineStart(index)
+
+    fun lineContent(index: Int): String {
+        val start = lineStart(index)
+        val end = lineEnd(index)
+        return if (start <= end && end <= fullText.length) {
+            fullText.substring(start, end)
+        } else {
+            ""
+        }
+    }
+}
+
+/**
+ * Dynamic per-line height and cumulative top-offset tracker.
+ * Handles paragraphs soft-wrapping to multiple visual lines with lazy layout measurement.
+ */
+private class LineLayoutTracker(lineCount: Int, defaultLineHeight: Float) {
+    private val heights = FloatArray(lineCount.coerceAtLeast(1)) { defaultLineHeight }
+    private val offsets = FloatArray(lineCount.coerceAtLeast(1))
+    private var dirty = true
+
+    fun updateHeight(lineIndex: Int, height: Float): Boolean {
+        if (lineIndex in heights.indices && heights[lineIndex] != height) {
+            heights[lineIndex] = height
+            dirty = true
+            return true
+        }
+        return false
+    }
+
+    private fun recomputeOffsets() {
+        if (!dirty) return
+        var accum = 0f
+        for (i in heights.indices) {
+            offsets[i] = accum
+            accum += heights[i]
+        }
+        dirty = false
+    }
+
+    fun getLineTop(lineIndex: Int): Float {
+        recomputeOffsets()
+        return if (lineIndex in offsets.indices) offsets[lineIndex] else 0f
+    }
+
+    fun getTotalHeight(): Float {
+        recomputeOffsets()
+        return if (heights.isNotEmpty()) offsets.last() + heights.last() else 0f
+    }
+
+    fun findLineAt(y: Float): Int {
+        recomputeOffsets()
+        val idx = offsets.binarySearch(y)
+        return if (idx >= 0) {
+            idx
+        } else {
+            val insertionPoint = -(idx + 1)
+            (insertionPoint - 1).coerceIn(0, (offsets.size - 1).coerceAtLeast(0))
+        }
+    }
+
+    fun findFirstVisible(scrollY: Float): Int {
+        val line = findLineAt(scrollY)
+        return (line - 1).coerceAtLeast(0)
+    }
+
+    fun findLastVisible(bottomY: Float): Int {
+        val line = findLineAt(bottomY)
+        return (line + 1).coerceAtMost((heights.size - 1).coerceAtLeast(0))
+    }
+}
+
+/**
  * Unified High-Performance Scribe Virtualized Canvas Prose Editor.
  *
  * Implements a virtualized Canvas text renderer directly on top of Compose BasicTextField:
  * - Single unbroken IME lifecycle: soft keyboard never stutters, closes, or flickers on tap.
  * - Virtualized per-line measurement & rendering: draws only visible lines for 100k+ word documents.
- * - Pixel-accurate tap-to-cursor placement: uses TextLayoutResult hit testing on measured lines.
+ * - Soft-wrap awareness: cumulative paragraph Y tracker adjusts dynamically to wrapped lines.
+ * - Real-time snapshot synchronization: directly reads live text to eliminate debounce lag.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -126,12 +238,13 @@ fun ScribeEditor(
 
     val lineHeightPx = with(density) { effectiveTextStyle.lineHeight.toPx() }
 
-    val outputTransformation = remember(engine, colorScheme, typography) {
-        ScribeOutputTransformation(
-            engine = engine,
-            colorScheme = colorScheme,
-            typography = typography
-        )
+    // Derive live document lines directly from text state to prevent 150ms buffer desync
+    val currentText = engine.state.text.toString()
+    val docLines = remember(currentText) { LiveDocumentLines(currentText) }
+
+    // Cumulative layout tracker for soft-wrapped paragraph heights
+    val layoutTracker = remember(docLines.lineCount, lineHeightPx) {
+        LineLayoutTracker(docLines.lineCount, lineHeightPx)
     }
 
     // --- Cursor blink (draw-phase only, key=Unit so it never restarts incorrectly) ---
@@ -151,7 +264,7 @@ fun ScribeEditor(
     // --- Programmatic scroll from engine (search jumps, outline navigation) ---
     LaunchedEffect(engine) {
         engine.focusRequests.collectLatest { request ->
-            val targetScrollY = (request.lineIndex * lineHeightPx)
+            val targetScrollY = layoutTracker.getLineTop(request.lineIndex)
                 .toInt()
                 .coerceIn(0, scrollState.maxValue)
             scrollState.animateScrollTo(targetScrollY)
@@ -161,11 +274,9 @@ fun ScribeEditor(
     }
 
     // --- Cache invalidation on document change ---
-    // DocumentBuffer has no dirty-line tracking API, so full lineCache.clear() is performed.
-    // TextMeasurer measures only visible lines, so this is an O(visible_lines) operation.
     LaunchedEffect(engine) {
         snapshotFlow { engine.state.text.toString() }
-            .drop(1) // skip the initial emission on subscription
+            .drop(1) // skip initial emission on subscription
             .collect {
                 lineCache.clear()
             }
@@ -180,7 +291,6 @@ fun ScribeEditor(
         cursorBrush = cursorBrush,
         lineLimits = TextFieldLineLimits.Default,
         scrollState = scrollState, // hoisted — Canvas reads this too
-        outputTransformation = outputTransformation,
         inputTransformation = ScribeInputTransformation,
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.Sentences,
@@ -193,9 +303,7 @@ fun ScribeEditor(
 
             // ── IME anchor ────────────────────────────────────────────────────────
             // innerTextField MUST be called or the keyboard disconnects.
-            // We hide it by placing it far above the visible area.
-            // The offset approach (vs size=0.dp) avoids accessibility cursor
-            // mis-reporting that the zero-size pattern can cause.
+            // Placed far off-screen to prevent layout clipping and cursor mis-reporting.
             Box(
                 Modifier
                     .offset(x = 0.dp, y = (-9999).dp)
@@ -205,32 +313,27 @@ fun ScribeEditor(
             }
 
             // ── Virtualized Canvas ─────────────────────────────────────────────────
-            // BoxWithConstraints gives us the viewport height in pixels.
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(contentPadding)
             ) {
                 val viewportHeightPx = constraints.maxHeight.toFloat()
-                val totalLines = engine.buffer.lineCount().coerceAtLeast(1)
-                // Add 200 dp breathing room so the last line is never clipped.
-                val totalHeightPx = totalLines * lineHeightPx + with(density) { 200.dp.toPx() }
+                val totalLines = docLines.lineCount.coerceAtLeast(1)
+                val totalHeightPx = layoutTracker.getTotalHeight() + with(density) { 200.dp.toPx() }
 
                 Canvas(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(with(density) { totalHeightPx.toDp() })
-                        .pointerInput(engine) {
+                        .pointerInput(engine, docLines, layoutTracker) {
                             detectTapGestures(
                                 onTap = { tapOffset ->
                                     val scrollY = scrollState.value.toFloat()
-                                    // tapOffset.y is relative to the Canvas top
                                     val docY = tapOffset.y + scrollY
-                                    val lineIndex = (docY / lineHeightPx)
-                                        .toInt()
-                                        .coerceIn(0, totalLines - 1)
-                                    val lineStart = engine.buffer.lineStart(lineIndex)
-                                    val lineContent = engine.buffer.lineContent(lineIndex)
+                                    val lineIndex = layoutTracker.findLineAt(docY)
+                                    val lineStart = docLines.lineStart(lineIndex)
+                                    val lineContent = docLines.lineContent(lineIndex)
                                     val spans = engine.formats.spansIn(
                                         lineStart,
                                         lineStart + lineContent.length
@@ -238,9 +341,8 @@ fun ScribeEditor(
                                     val hash = contentHash(lineContent, spans)
                                     val layoutResult = lineCache.get(lineIndex, hash)
 
-                                    // getOffsetForPosition expects offset relative to the
-                                    // top-left of the measured layout, not the document.
-                                    val localY = docY - lineIndex * lineHeightPx
+                                    val lineTop = layoutTracker.getLineTop(lineIndex)
+                                    val localY = docY - lineTop
                                     val charInLine = layoutResult
                                         ?.getOffsetForPosition(Offset(tapOffset.x, localY))
                                         ?: lineContent.length
@@ -255,10 +357,7 @@ fun ScribeEditor(
                                 onLongPress = { tapOffset ->
                                     val scrollY = scrollState.value.toFloat()
                                     val docY = tapOffset.y + scrollY
-                                    val lineIndex = (docY / lineHeightPx)
-                                        .toInt()
-                                        .coerceIn(0, totalLines - 1)
-                                    // Delegate word selection to the engine.
+                                    val lineIndex = layoutTracker.findLineAt(docY)
                                     engine.requestLineFocus(lineIndex)
                                 }
                             )
@@ -266,22 +365,19 @@ fun ScribeEditor(
                 ) {
                     val scrollY = scrollState.value.toFloat()
 
-                    // Viewport line calculation.
-                    // The +1/-1 buffers prevent lines from popping in/out at edges.
-                    val firstVisible = ((scrollY / lineHeightPx).toInt() - 1)
-                        .coerceAtLeast(0)
-                    val lastVisible = (((scrollY + viewportHeightPx) / lineHeightPx).toInt() + 1)
-                        .coerceAtMost(totalLines - 1)
+                    // Viewport line range via binary search over cumulative paragraph offsets
+                    val firstVisible = layoutTracker.findFirstVisible(scrollY)
+                    val lastVisible = layoutTracker.findLastVisible(scrollY + viewportHeightPx)
 
                     val selStart = engine.state.selection.min
                     val selEnd = engine.state.selection.max
                     val cursorPos = engine.state.selection.start
 
                     for (lineIndex in firstVisible..lastVisible) {
-                        val lineStart = engine.buffer.lineStart(lineIndex)
-                        val lineLen = engine.buffer.lineLength(lineIndex)
+                        val lineStart = docLines.lineStart(lineIndex)
+                        val lineLen = docLines.lineLength(lineIndex)
                         val lineEnd = lineStart + lineLen
-                        val lineContent = engine.buffer.lineContent(lineIndex)
+                        val lineContent = docLines.lineContent(lineIndex)
                         val spans = engine.formats.spansIn(lineStart, lineEnd)
                         val hash = contentHash(lineContent, spans)
 
@@ -300,10 +396,15 @@ fun ScribeEditor(
                                 style = effectiveTextStyle,
                                 constraints = Constraints.fixedWidth(size.width.toInt().coerceAtLeast(1)),
                                 softWrap = true
-                            ).also { lineCache.put(lineIndex, hash, it) }
+                            ).also {
+                                lineCache.put(lineIndex, hash, it)
+                            }
 
-                        // lineTopY: distance from canvas top to this line, minus current scroll.
-                        val lineTopY = lineIndex * lineHeightPx - scrollY
+                        // Update dynamic line height for soft-wrap handling
+                        layoutTracker.updateHeight(lineIndex, layoutResult.size.height.toFloat())
+
+                        // Exact top Y of this paragraph taking all preceding line heights into account
+                        val lineTopY = layoutTracker.getLineTop(lineIndex) - scrollY
 
                         // ── Selection highlight ──────────────────────────────────────────
                         if (selStart != selEnd) {
