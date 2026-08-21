@@ -34,13 +34,18 @@ data class CachedLine(
     val result: TextLayoutResult,
 )
 
-class ScribeLineCache {
+/**
+ * High-performance per-line TextLayoutResult cache for virtualized Canvas rendering.
+ *
+ * Inspired by Sora Editor's layout caching:
+ * - Deterministic lookup keyed by (lineIndex, contentHash).
+ * - When user types on line L, only line L's contentHash changes.
+ * - All other visible/offscreen lines HIT the cache in O(1) without re-measuring text.
+ * - LRU/capacity eviction bounds memory while avoiding unnecessary garbage collection.
+ */
+class ScribeLineCache(private val maxCapacity: Int = 1024) {
 
-    private val maxCapacity = 512
-    // LinkedHashMap with accessOrder=false (insertion order) is fine here because we
-    // evict by key (lineIndex), not by access recency. We want to evict the smallest
-    // lineIndex (furthest above viewport) when over capacity.
-    private val map = LinkedHashMap<Int, CachedLine>(maxCapacity + 1)
+    private val map = LinkedHashMap<Int, CachedLine>(maxCapacity + 1, 0.75f, true)
 
     /** Returns a cached result only if contentHash still matches. null = stale or absent. */
     fun get(lineIndex: Int, contentHash: Int): TextLayoutResult? {
@@ -51,10 +56,10 @@ class ScribeLineCache {
     fun put(lineIndex: Int, contentHash: Int, result: TextLayoutResult) {
         map[lineIndex] = CachedLine(contentHash, result)
         if (map.size > maxCapacity) {
-            // Evict the entry with the smallest (oldest, furthest above viewport) key.
-            val minKey = map.keys.minOrNull()
-            if (minKey != null) {
-                map.remove(minKey)
+            val iterator = map.iterator()
+            if (iterator.hasNext()) {
+                iterator.next()
+                iterator.remove()
             }
         }
     }
@@ -64,16 +69,9 @@ class ScribeLineCache {
         map.remove(lineIndex)
     }
 
-    /**
-     * Removes all entries with key >= lineIndex.
-     * Call when an insert or delete shifts line indices downward,
-     * because every line after the change point has a different lineIndex mapping.
-     */
+    /** Removes all entries with key >= lineIndex. */
     fun invalidateFrom(lineIndex: Int) {
-        val keysToRemove = map.keys.filter { it >= lineIndex }
-        for (key in keysToRemove) {
-            map.remove(key)
-        }
+        map.entries.removeIf { it.key >= lineIndex }
     }
 
     /** Full clear — call on document text mutations or new document load. */
@@ -82,6 +80,11 @@ class ScribeLineCache {
     }
 }
 
-/** Content hash: pure Kotlin, no Android deps. */
-fun contentHash(lineText: String, spans: List<Any>): Int =
-    lineText.hashCode() * 31 xor spans.hashCode()
+/** Content hash: fast calculation combining line text, format spans, and search highlights. */
+fun contentHash(lineText: CharSequence, spans: List<Any>, searchVersion: Int = 0): Int {
+    var result = lineText.hashCode()
+    result = 31 * result + spans.hashCode()
+    result = 31 * result + searchVersion
+    return result
+}
+
