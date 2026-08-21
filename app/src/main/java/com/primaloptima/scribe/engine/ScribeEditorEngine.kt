@@ -283,7 +283,7 @@ class ScribeEditorEngine(
     }
 
     fun notifyMutation() {
-        lineIndexer.index(state.text)
+        // lineIndexer is kept in sync by snapshotFlow { state.text } in init — do not re-index here
         _lineCount.intValue = lineIndexer.lineCount
         _canUndo.value = undoStack.canUndo()
         _canRedo.value = undoStack.canRedo()

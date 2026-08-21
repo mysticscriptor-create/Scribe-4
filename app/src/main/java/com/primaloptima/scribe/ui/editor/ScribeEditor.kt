@@ -212,14 +212,13 @@ fun ScribeEditor(
     val lineIndexer = engine.lineIndexer
     val layoutTracker = remember(lineHeightPx) { LineLayoutTracker(lineHeightPx) }
 
-    // Ensure line indexer and layout tracker are immediately in sync
-    lineIndexer.index(engine.state.text)
-    layoutTracker.sync(lineIndexer)
-
     // Synchronize line indexer and layout tracker on text change
     LaunchedEffect(engine.state.text) {
+        val prevCount = layoutTracker.count
         lineIndexer.index(engine.state.text)
-        layoutTracker.sync(lineIndexer)
+        if (layoutTracker.count != lineIndexer.lineCount) {
+            layoutTracker.sync(lineIndexer)
+        }
     }
 
     val coroutineScope = rememberCoroutineScope()
@@ -227,6 +226,7 @@ fun ScribeEditor(
     var scrollY by remember { mutableFloatStateOf(0f) }
     var dragAnchorOffset by remember { mutableIntStateOf(-1) }
     var scrollAnimationJob by remember { mutableStateOf<Job?>(null) }
+    var isUserTapSelection by remember { mutableStateOf(false) }
 
     val bottomPaddingPx = with(density) { 320.dp.toPx() }
 
@@ -287,6 +287,10 @@ fun ScribeEditor(
 
     // Viewport tracking: ensure cursor remains visible only when cursor goes outside viewport
     LaunchedEffect(engine.state.selection) {
+        if (isUserTapSelection) {
+            isUserTapSelection = false
+            return@LaunchedEffect
+        }
         val cursorPos = engine.state.selection.start
         val lineIndex = lineIndexer.lineIndexForOffset(cursorPos)
         val lineTop = layoutTracker.getLineTop(lineIndex)
@@ -295,10 +299,11 @@ fun ScribeEditor(
         val viewport = viewportHeightPx
         if (viewport > 0f) {
             val paddingPx = with(density) { 16.dp.toPx() }
-            if (lineBottom > scrollY + viewport) {
+            val marginPx = with(density) { 48.dp.toPx() } // ignore tiny out-of-bounds due to height estimation
+            if (lineBottom > scrollY + viewport + marginPx) {
                 val target = (lineBottom - viewport + paddingPx).coerceAtLeast(0f)
                 animateScrollTo(target)
-            } else if (lineTop < scrollY) {
+            } else if (lineTop < scrollY - marginPx) {
                 val target = (lineTop - paddingPx).coerceAtLeast(0f)
                 animateScrollTo(target)
             }
@@ -376,7 +381,7 @@ fun ScribeEditor(
                                 orientation = Orientation.Vertical,
                                 state = scrollableState
                             )
-                            .pointerInput(engine, effectiveTextStyle) {
+                            .pointerInput(Unit) {
                                 var lastTapTime = 0L
                                 var lastTapOffset = Offset.Zero
                                 val doubleTapTimeout = viewConfiguration.doubleTapTimeoutMillis
@@ -411,6 +416,7 @@ fun ScribeEditor(
                                         val targetPos = (lineStart + charInLine).coerceIn(0, engine.state.text.length)
                                         val wordRange = selectWordAt(engine.state.text, targetPos)
 
+                                        isUserTapSelection = true
                                         engine.state.edit {
                                             selection = wordRange
                                         }
@@ -458,6 +464,7 @@ fun ScribeEditor(
                                         val charInLine = layoutResult.getOffsetForPosition(Offset(downPos.x, localY))
                                         val targetPos = (lineStart + charInLine).coerceIn(0, engine.state.text.length)
 
+                                        isUserTapSelection = true
                                         engine.state.edit {
                                             selection = TextRange(targetPos)
                                         }
